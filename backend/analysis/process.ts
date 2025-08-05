@@ -60,7 +60,7 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
       throw APIError.invalidArgument("Spreadsheet contains no data");
     }
     
-    // Clear existing BoQ items for this project
+    // Clear existing BoQ items for this project to ensure fresh data
     await db.exec`DELETE FROM boq_items WHERE project_id = ${req.projectId}`;
     
     // Process and insert BoQ items
@@ -71,13 +71,14 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
       // Try to identify columns (flexible mapping)
       const itemCodeRaw = rowData['Item Code'] || rowData.itemCode || rowData['Code'] || rowData.code || '';
       const itemCode = itemCodeRaw ? String(itemCodeRaw).trim() : '';
-      const description = rowData.Description || rowData.description || rowData.Item || rowData.item || '';
+      const description = String(rowData.Description || rowData.description || rowData.Item || rowData.item || '').trim();
       const quantity = parseFloat(rowData.Quantity || rowData.quantity || rowData.Qty || rowData.qty || '0');
-      const unit = rowData.Unit || rowData.unit || '';
+      const unit = String(rowData.Unit || rowData.unit || '').trim();
       const unitRate = parseFloat(rowData['Unit Rate'] || rowData.unitRate || rowData.Rate || rowData.rate || '0');
       const totalCost = parseFloat(rowData['Total Cost'] || rowData.totalCost || rowData.Total || rowData.total || '0') || (quantity * unitRate);
       
-      if (itemCode && description && totalCost > 0) {
+      // Only include valid items with required data
+      if (itemCode && description && totalCost > 0 && quantity > 0 && unitRate > 0) {
         // Determine WBS level from item code
         const wbsLevel = determineWBSLevelFromCode(itemCode);
         const parentItemCode = getParentItemCode(itemCode);
@@ -96,10 +97,10 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
     }
     
     if (items.length === 0) {
-      throw APIError.invalidArgument("No valid BoQ items found in spreadsheet");
+      throw APIError.invalidArgument("No valid BoQ items found in spreadsheet. Please check that your spreadsheet contains Item Code, Description, Quantity, Unit Rate, and Total Cost columns with valid data.");
     }
     
-    // Sort by total cost (descending)
+    // Sort by total cost (descending) for proper Pareto analysis
     items.sort((a, b) => b.totalCost - a.totalCost);
     
     // Calculate cumulative values and Pareto analysis
@@ -107,6 +108,7 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
     let cumulativeCost = 0;
     let paretoCriticalItems = 0;
     
+    // Insert items and calculate cumulative values
     for (let i = 0; i < items.length; i++) {
       cumulativeCost += items[i].totalCost;
       const cumulativePercentage = (cumulativeCost / totalProjectCost) * 100;
@@ -116,7 +118,7 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
         paretoCriticalItems++;
       }
       
-      // Insert into database
+      // Insert into database with calculated values
       await db.exec`
         INSERT INTO boq_items (
           project_id, item_code, item_number, description, 
@@ -130,17 +132,18 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
         )
       `;
       
+      // Update local items array with calculated values
       items[i].cumulativeCost = cumulativeCost;
       items[i].cumulativePercentage = cumulativePercentage;
       items[i].isParetoCritical = isParetoCritical;
     }
     
-    // Update project status
+    // Update project status to processed
     await db.exec`
       UPDATE projects SET status = 'processed' WHERE id = ${req.projectId}
     `;
     
-    // Get processed items from database with IDs
+    // Get processed items from database with IDs for return
     const processedItems = await db.queryAll<BoQItem>`
       SELECT 
         id, item_code as "itemCode", item_number as "itemNumber",

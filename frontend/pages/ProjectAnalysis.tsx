@@ -95,15 +95,18 @@ export default function ProjectAnalysis() {
         title: "Processing complete",
         description: "Pareto analysis has been completed successfully."
       });
-      refetchAnalysis();
-      refetchWBSLevel1();
+      // Refetch all data to get the latest processed results
+      await Promise.all([
+        refetchAnalysis(),
+        refetchWBSLevel1()
+      ]);
       // Reset WBS levels to level 1 only
       setWbsLevels([{ level: 1 }]);
     } catch (error) {
       console.error('Processing error:', error);
       toast({
         title: "Processing failed",
-        description: "There was an error processing the spreadsheet.",
+        description: "There was an error processing the spreadsheet. Please check your file format and try again.",
         variant: "destructive"
       });
     } finally {
@@ -318,6 +321,17 @@ export default function ProjectAnalysis() {
             <p className="text-gray-500 mb-4">
               Click "Process Spreadsheet" to perform Pareto analysis on your uploaded data.
             </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4 text-left">
+              <h4 className="font-medium text-blue-900 mb-2">Required Spreadsheet Format:</h4>
+              <ul className="text-sm text-blue-800 space-y-1">
+                <li>• <strong>Item Code:</strong> Hierarchical codes (1, 1.1, 1.1.1)</li>
+                <li>• <strong>Description:</strong> Item description</li>
+                <li>• <strong>Quantity:</strong> Numeric quantity</li>
+                <li>• <strong>Unit:</strong> Unit of measurement</li>
+                <li>• <strong>Unit Rate:</strong> Cost per unit</li>
+                <li>• <strong>Total Cost:</strong> Total item cost</li>
+              </ul>
+            </div>
           </CardContent>
         </Card>
       ) : (
@@ -351,7 +365,7 @@ export default function ProjectAnalysis() {
               <CardContent>
                 <div className="text-2xl font-bold">{paretoCriticalItems}</div>
                 <p className="text-xs text-muted-foreground">
-                  {((paretoCriticalItems / totalItems) * 100).toFixed(1)}% of total items
+                  {totalItems > 0 ? ((paretoCriticalItems / totalItems) * 100).toFixed(1) : 0}% of total items
                 </p>
               </CardContent>
             </Card>
@@ -469,14 +483,26 @@ export default function ProjectAnalysis() {
             })}
           </div>
 
-          {/* Overall Project Pareto Chart - using current processed data */}
-          {analysisData && analysisData.items.length > 0 && (
+          {/* Overall Project Pareto Chart - using current processed data from this project only */}
+          {items.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle>Overall Project Pareto Analysis (All Items)</CardTitle>
+                <CardTitle>
+                  Overall Project Pareto Analysis (All Items)
+                  <span className="text-sm font-normal text-gray-500 ml-2">
+                    - Current Project Data
+                  </span>
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <ParetoChart items={analysisData.items} currency={currency} />
+                <ParetoChart items={items} currency={currency} />
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600">
+                    <strong>Analysis Summary:</strong> This chart shows all {items.length} items from the current project, 
+                    sorted by cost. The top {paretoCriticalItems} items ({((paretoCriticalItems / items.length) * 100).toFixed(1)}%) 
+                    represent 80% of the total project cost ({formatCurrency(totalProjectCost, currency)}).
+                  </p>
+                </div>
               </CardContent>
             </Card>
           )}

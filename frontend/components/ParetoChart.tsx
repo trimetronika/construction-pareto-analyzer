@@ -11,6 +11,9 @@ interface BoQItem {
   totalCost: number;
   cumulativePercentage?: number;
   isParetoCritical: boolean;
+  quantity?: number;
+  unit?: string;
+  unitRate?: number;
 }
 
 interface ParetoChartProps {
@@ -33,8 +36,8 @@ export default function ParetoChart({ items, currency = 'USD' }: ParetoChartProp
     const ctx = chartRef.current.getContext('2d');
     if (!ctx) return;
 
-    // Prepare data for top 20 items
-    const topItems = items.slice(0, 20);
+    // Prepare data for top 20 items (or all items if less than 20)
+    const topItems = items.slice(0, Math.min(20, items.length));
     const labels = topItems.map((item, index) => {
       const itemLabel = item.itemCode ? `${item.itemCode}: ${item.description}` : item.description;
       return `${index + 1}. ${itemLabel.substring(0, 30)}${itemLabel.length > 30 ? '...' : ''}`;
@@ -86,7 +89,22 @@ export default function ParetoChart({ items, currency = 'USD' }: ParetoChartProp
             callbacks: {
               label: function(context) {
                 if (context.datasetIndex === 0) {
-                  return `Cost: ${formatCurrency(context.parsed.y, currency)}`;
+                  const item = topItems[context.dataIndex];
+                  const tooltipLines = [
+                    `Cost: ${formatCurrency(context.parsed.y, currency)}`
+                  ];
+                  
+                  if (item.quantity) {
+                    tooltipLines.push(`Quantity: ${item.quantity.toLocaleString()}`);
+                  }
+                  if (item.unit) {
+                    tooltipLines.push(`Unit: ${item.unit}`);
+                  }
+                  if (item.unitRate) {
+                    tooltipLines.push(`Unit Rate: ${formatCurrency(item.unitRate, currency)}`);
+                  }
+                  
+                  return tooltipLines;
                 } else {
                   return `Cumulative: ${context.parsed.y.toFixed(1)}%`;
                 }
@@ -166,6 +184,9 @@ export default function ParetoChart({ items, currency = 'USD' }: ParetoChartProp
   return (
     <div className="relative h-64">
       <canvas ref={chartRef} />
+      <div className="absolute top-2 right-2 text-xs text-gray-500 bg-white px-2 py-1 rounded shadow">
+        Showing top {Math.min(20, items.length)} of {items.length} items
+      </div>
     </div>
   );
 }

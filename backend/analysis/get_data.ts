@@ -55,21 +55,27 @@ export const getAnalysisData = api<GetAnalysisRequest, GetAnalysisResponse>(
       throw APIError.notFound("Project not found");
     }
     
-    // Get BoQ items
-    const items = await db.queryAll<BoQItem>`
-      SELECT 
-        id, item_code as "itemCode", item_number as "itemNumber",
-        description, quantity, unit, unit_rate as "unitRate",
-        total_cost as "totalCost", cumulative_cost as "cumulativeCost", 
-        cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical",
-        wbs_level as "wbsLevel", parent_item_number as "parentItemNumber"
-      FROM boq_items 
-      WHERE project_id = ${req.projectId}
-      ORDER BY total_cost DESC
-    `;
+    // Get BoQ items - only return items if project is processed
+    let items: BoQItem[] = [];
+    let totalProjectCost = 0;
+    let paretoCriticalItems = 0;
     
-    const totalProjectCost = items.reduce((sum, item) => sum + item.totalCost, 0);
-    const paretoCriticalItems = items.filter(item => item.isParetoCritical).length;
+    if (project.status === 'processed') {
+      items = await db.queryAll<BoQItem>`
+        SELECT 
+          id, item_code as "itemCode", item_number as "itemNumber",
+          description, quantity, unit, unit_rate as "unitRate",
+          total_cost as "totalCost", cumulative_cost as "cumulativeCost", 
+          cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical",
+          wbs_level as "wbsLevel", parent_item_number as "parentItemNumber"
+        FROM boq_items 
+        WHERE project_id = ${req.projectId}
+        ORDER BY total_cost DESC
+      `;
+      
+      totalProjectCost = items.reduce((sum, item) => sum + item.totalCost, 0);
+      paretoCriticalItems = items.filter(item => item.isParetoCritical).length;
+    }
     
     return {
       project,
