@@ -117,7 +117,7 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
     const processedItems = items.map((item, index) => {
       cumulativeCost += item.totalCost;
       const cumulativePercentage = (cumulativeCost / totalCost) * 100;
-      const isParetoCritical = cumulativePercentage <= 80;
+      const isParetoCritical = cumulativePercentage <= 90;
       
       return {
         id: item.id,
