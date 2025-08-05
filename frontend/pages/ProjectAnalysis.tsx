@@ -65,7 +65,7 @@ export default function ProjectAnalysis() {
       level: 2,
       parentItemCode: wbsLevels[1]?.parentItemCode
     }),
-    enabled: !!projectId && analysisData?.project.status === 'processed' && wbsLevels.length > 1 && wbsLevels[1]?.parentItemCode
+    enabled: !!projectId && analysisData?.project.status === 'processed' && wbsLevels.length > 1 && !!wbsLevels[1]?.parentItemCode
   });
 
   // Query for Level 3 WBS data
@@ -76,7 +76,7 @@ export default function ProjectAnalysis() {
       level: 3,
       parentItemCode: wbsLevels[2]?.parentItemCode
     }),
-    enabled: !!projectId && analysisData?.project.status === 'processed' && wbsLevels.length > 2 && wbsLevels[2]?.parentItemCode
+    enabled: !!projectId && analysisData?.project.status === 'processed' && wbsLevels.length > 2 && !!wbsLevels[2]?.parentItemCode
   });
 
   const { data: insightsData, isLoading: isLoadingInsights, refetch: refetchInsights } = useQuery({
@@ -469,15 +469,17 @@ export default function ProjectAnalysis() {
             })}
           </div>
 
-          {/* Original Pareto Chart for reference */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Overall Project Pareto Analysis (All Items)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ParetoChart items={items} currency={currency} />
-            </CardContent>
-          </Card>
+          {/* Overall Project Pareto Chart - using current processed data */}
+          {analysisData && analysisData.items.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Overall Project Pareto Analysis (All Items)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ParetoChart items={analysisData.items} currency={currency} />
+              </CardContent>
+            </Card>
+          )}
 
           <InsightsPanel 
             projectId={projectId!} 

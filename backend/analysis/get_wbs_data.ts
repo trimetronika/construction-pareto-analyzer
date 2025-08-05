@@ -87,7 +87,7 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
         ORDER BY total_cost DESC
       `;
     } else if (req.level === 2) {
-      // Level 2: Aggregate by second level under parent (e.g., "1.1", "1.2" under "1")
+      // Level 2: Get items that start with parent code followed by a dot and another number
       if (!req.parentItemCode) {
         throw APIError.invalidArgument("Parent item code required for level 2");
       }
@@ -106,7 +106,8 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
           FROM boq_items 
           WHERE project_id = ${req.projectId} 
             AND item_code LIKE ${req.parentItemCode + '.%'}
-            AND item_code ~ ${'^' + req.parentItemCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.[0-9]+$'}
+            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 1
+            AND item_code != ${req.parentItemCode}
           GROUP BY item_code
         )
         SELECT 
@@ -123,7 +124,7 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
         ORDER BY total_cost DESC
       `;
     } else {
-      // Level 3+: Aggregate by third level under parent (e.g., "1.1.1", "1.1.2" under "1.1")
+      // Level 3: Get items that start with parent code followed by a dot and another number
       if (!req.parentItemCode) {
         throw APIError.invalidArgument("Parent item code required for level 3+");
       }
@@ -142,7 +143,8 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
           FROM boq_items 
           WHERE project_id = ${req.projectId} 
             AND item_code LIKE ${req.parentItemCode + '.%'}
-            AND item_code ~ ${'^' + req.parentItemCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.[0-9]+$'}
+            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 2
+            AND item_code != ${req.parentItemCode}
           GROUP BY item_code
         )
         SELECT 

@@ -6,6 +6,7 @@ Chart.register(...registerables);
 
 interface BoQItem {
   id: number;
+  itemCode?: string;
   description: string;
   totalCost: number;
   cumulativePercentage?: number;
@@ -34,7 +35,10 @@ export default function ParetoChart({ items, currency = 'USD' }: ParetoChartProp
 
     // Prepare data for top 20 items
     const topItems = items.slice(0, 20);
-    const labels = topItems.map((item, index) => `${index + 1}. ${item.description.substring(0, 30)}...`);
+    const labels = topItems.map((item, index) => {
+      const itemLabel = item.itemCode ? `${item.itemCode}: ${item.description}` : item.description;
+      return `${index + 1}. ${itemLabel.substring(0, 30)}${itemLabel.length > 30 ? '...' : ''}`;
+    });
     const costs = topItems.map(item => item.totalCost);
     const cumulativePercentages = topItems.map(item => item.cumulativePercentage || 0);
     const colors = topItems.map(item => item.isParetoCritical ? '#3b82f6' : '#94a3b8');
@@ -86,6 +90,11 @@ export default function ParetoChart({ items, currency = 'USD' }: ParetoChartProp
                 } else {
                   return `Cumulative: ${context.parsed.y.toFixed(1)}%`;
                 }
+              },
+              title: function(context) {
+                const item = topItems[context[0].dataIndex];
+                const itemLabel = item.itemCode ? `${item.itemCode}: ${item.description}` : item.description;
+                return itemLabel;
               }
             }
           }
