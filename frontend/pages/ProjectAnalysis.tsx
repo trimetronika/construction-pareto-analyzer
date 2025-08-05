@@ -19,10 +19,16 @@ import { useNavigate } from 'react-router-dom';
 import backend from '~backend/client';
 import ParetoChart from '../components/ParetoChart';
 import WBSParetoChart, { WBSItem } from '../components/WBSParetoChart';
-import WBSBreadcrumb, { WBSLevel } from '../components/WBSBreadcrumb';
 import InsightsPanel from '../components/InsightsPanel';
 import CurrencySelector, { Currency } from '../components/CurrencySelector';
 import { formatCurrency } from '../utils/currency';
+
+interface WBSLevelData {
+  level: number;
+  parentItemCode?: string;
+  data?: any;
+  isLoading: boolean;
+}
 
 export default function ProjectAnalysis() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -30,9 +36,9 @@ export default function ProjectAnalysis() {
   const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [currency, setCurrency] = useState<Currency>('USD');
-  const [currentWBSLevel, setCurrentWBSLevel] = useState(1);
-  const [currentParentItemCode, setCurrentParentItemCode] = useState<string | undefined>();
-  const [wbsPath, setWbsPath] = useState<WBSLevel[]>([{ level: 1, description: 'Project Overview' }]);
+  const [wbsLevels, setWbsLevels] = useState<WBSLevelData[]>([
+    { level: 1, isLoading: false }
+  ]);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -42,14 +48,36 @@ export default function ProjectAnalysis() {
     enabled: !!projectId
   });
 
-  const { data: wbsData, isLoading: isLoadingWBS, refetch: refetchWBS } = useQuery({
-    queryKey: ['wbs', projectId, currentWBSLevel, currentParentItemCode],
+  // Query for Level 1 WBS data
+  const { data: wbsLevel1Data, isLoading: isLoadingWBSLevel1, refetch: refetchWBSLevel1 } = useQuery({
+    queryKey: ['wbs', projectId, 1],
     queryFn: () => backend.analysis.getWBSData({ 
       projectId: projectId!, 
-      level: currentWBSLevel,
-      parentItemCode: currentParentItemCode
+      level: 1
     }),
     enabled: !!projectId && analysisData?.project.status === 'processed'
+  });
+
+  // Query for Level 2 WBS data
+  const { data: wbsLevel2Data, isLoading: isLoadingWBSLevel2, refetch: refetchWBSLevel2 } = useQuery({
+    queryKey: ['wbs', projectId, 2, wbsLevels[1]?.parentItemCode],
+    queryFn: () => backend.analysis.getWBSData({ 
+      projectId: projectId!, 
+      level: 2,
+      parentItemCode: wbsLevels[1]?.parentItemCode
+    }),
+    enabled: !!projectId && analysisData?.project.status === 'processed' && wbsLevels.length > 1 && wbsLevels[1]?.parentItemCode
+  });
+
+  // Query for Level 3 WBS data
+  const { data: wbsLevel3Data, isLoading: isLoadingWBSLevel3, refetch: refetchWBSLevel3 } = useQuery({
+    queryKey: ['wbs', projectId, 3, wbsLevels[2]?.parentItemCode],
+    queryFn: () => backend.analysis.getWBSData({ 
+      projectId: projectId!, 
+      level: 3,
+      parentItemCode: wbsLevels[2]?.parentItemCode
+    }),
+    enabled: !!projectId && analysisData?.project.status === 'processed' && wbsLevels.length > 2 && wbsLevels[2]?.parentItemCode
   });
 
   const { data: insightsData, isLoading: isLoadingInsights, refetch: refetchInsights } = useQuery({
@@ -69,7 +97,7 @@ export default function ProjectAnalysis() {
         description: "Pareto analysis has been completed successfully."
       });
       refetchAnalysis();
-      refetchWBS();
+      refetchWBSLevel1();
     } catch (error) {
       console.error('Processing error:', error);
       toast({
@@ -131,31 +159,45 @@ export default function ProjectAnalysis() {
     }
   };
 
-  const handleWBSItemClick = (item: WBSItem) => {
-    if (currentWBSLevel >= 3) return; // Max 3 levels
+  const handleWBSItemClick = (item: WBSItem, level: number) => {
+    if (level >= 3) return; // Max 3 levels
 
-    const newLevel = currentWBSLevel + 1;
-    const newParentItemCode = item.itemCode;
+    const newLevel = level + 1;
     
-    setCurrentWBSLevel(newLevel);
-    setCurrentParentItemCode(newParentItemCode);
-    
-    // Update breadcrumb path
-    const newPath = [...wbsPath, {
+    // Update WBS levels state
+    const newWbsLevels = wbsLevels.slice(0, level);
+    newWbsLevels.push({
       level: newLevel,
-      itemCode: newParentItemCode,
-      description: item.description
-    }];
-    setWbsPath(newPath);
+      parentItemCode: item.itemCode,
+      isLoading: true
+    });
+    
+    setWbsLevels(newWbsLevels);
+    
+    // Trigger refetch for the new level
+    if (newLevel === 2) {
+      refetchWBSLevel2();
+    } else if (newLevel === 3) {
+      refetchWBSLevel3();
+    }
   };
 
-  const handleBreadcrumbClick = (level: number, itemCode?: string) => {
-    setCurrentWBSLevel(level);
-    setCurrentParentItemCode(itemCode);
-    
-    // Update breadcrumb path
-    const newPath = wbsPath.slice(0, level);
-    setWbsPath(newPath);
+  const getWBSData = (level: number) => {
+    switch (level) {
+      case 1: return wbsLevel1Data;
+      case 2: return wbsLevel2Data;
+      case 3: return wbsLevel3Data;
+      default: return null;
+    }
+  };
+
+  const getWBSLoading = (level: number) => {
+    switch (level) {
+      case 1: return isLoadingWBSLevel1;
+      case 2: return isLoadingWBSLevel2;
+      case 3: return isLoadingWBSLevel3;
+      default: return false;
+    }
   };
 
   if (isLoadingAnalysis) {
@@ -330,108 +372,110 @@ export default function ProjectAnalysis() {
             </Card>
           </div>
 
-          {/* WBS Navigation */}
-          <WBSBreadcrumb 
-            levels={wbsPath} 
-            onLevelClick={handleBreadcrumbClick}
-          />
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  WBS Level {currentWBSLevel} Pareto Analysis
-                  {currentWBSLevel > 1 && (
-                    <span className="text-sm font-normal text-gray-500 ml-2">
-                      (Drill-down Analysis)
-                    </span>
-                  )}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoadingWBS ? (
-                  <div className="flex items-center justify-center h-64">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                  </div>
-                ) : wbsData && wbsData.items.length > 0 ? (
-                  <WBSParetoChart 
-                    items={wbsData.items} 
-                    currency={currency}
-                    onItemClick={handleWBSItemClick}
-                    level={currentWBSLevel}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-64 text-gray-500">
-                    No data available for this WBS level
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  Critical Items - Level {currentWBSLevel}
-                  {wbsData && (
-                    <span className="text-sm font-normal text-gray-500 ml-2">
-                      ({wbsData.items.filter(item => item.isParetoCritical).length} items)
-                    </span>
-                  )}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {wbsData?.items.filter(item => item.isParetoCritical).slice(0, 10).map((item) => (
-                    <div 
-                      key={item.id} 
-                      className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
-                        currentWBSLevel < 3 ? 'hover:bg-gray-50 cursor-pointer' : ''
-                      }`}
-                      onClick={() => currentWBSLevel < 3 && handleWBSItemClick(item)}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">
-                          {item.itemCode}: {item.description}
-                        </p>
-                        <div className="text-xs text-gray-500 space-y-1">
-                          <p>{item.itemCount} sub-item{item.itemCount !== 1 ? 's' : ''}</p>
-                          {item.quantity && (
-                            <p>Qty: {item.quantity.toLocaleString()} {item.unit}</p>
-                          )}
-                          {item.unitRate && (
-                            <p>Rate: {formatCurrency(item.unitRate, currency)}</p>
-                          )}
+          {/* Multi-Level WBS Analysis */}
+          <div className="space-y-6">
+            {wbsLevels.map((levelData, index) => {
+              const wbsData = getWBSData(levelData.level);
+              const isLoading = getWBSLoading(levelData.level);
+              
+              return (
+                <div key={levelData.level} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>
+                        WBS Level {levelData.level} Pareto Analysis
+                        {levelData.parentItemCode && (
+                          <span className="text-sm font-normal text-gray-500 ml-2">
+                            (Under {levelData.parentItemCode})
+                          </span>
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {isLoading ? (
+                        <div className="flex items-center justify-center h-64">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                         </div>
+                      ) : wbsData && wbsData.items.length > 0 ? (
+                        <WBSParetoChart 
+                          items={wbsData.items} 
+                          currency={currency}
+                          onItemClick={(item) => handleWBSItemClick(item, levelData.level)}
+                          level={levelData.level}
+                        />
+                      ) : (
+                        <div className="flex items-center justify-center h-64 text-gray-500">
+                          No data available for this WBS level
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>
+                        Critical Items - Level {levelData.level}
+                        {wbsData && (
+                          <span className="text-sm font-normal text-gray-500 ml-2">
+                            ({wbsData.items.filter(item => item.isParetoCritical).length} items)
+                          </span>
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {wbsData?.items.filter(item => item.isParetoCritical).slice(0, 10).map((item) => (
+                          <div 
+                            key={item.id} 
+                            className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                              levelData.level < 3 ? 'hover:bg-gray-50 cursor-pointer' : ''
+                            }`}
+                            onClick={() => levelData.level < 3 && handleWBSItemClick(item, levelData.level)}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-gray-900 truncate">
+                                {item.itemCode}: {item.description}
+                              </p>
+                              <div className="text-xs text-gray-500 space-y-1">
+                                <p>{item.itemCount} sub-item{item.itemCount !== 1 ? 's' : ''}</p>
+                                {item.quantity && (
+                                  <p>Qty: {item.quantity.toLocaleString()} {item.unit}</p>
+                                )}
+                                {item.unitRate && (
+                                  <p>Rate: {formatCurrency(item.unitRate, currency)}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-bold">{formatCurrency(item.totalCost, currency)}</p>
+                              <Badge variant="secondary" className="text-xs">
+                                {item.cumulativePercentage.toFixed(1)}%
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-bold">{formatCurrency(item.totalCost, currency)}</p>
-                        <Badge variant="secondary" className="text-xs">
-                          {item.cumulativePercentage.toFixed(1)}%
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
+                      {levelData.level < 3 && wbsData?.items.some(item => item.isParetoCritical) && (
+                        <p className="text-xs text-gray-500 mt-3 text-center">
+                          Click items to drill down to the next level
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
-                {currentWBSLevel < 3 && wbsData?.items.some(item => item.isParetoCritical) && (
-                  <p className="text-xs text-gray-500 mt-3 text-center">
-                    Click items to drill down to the next level
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+              );
+            })}
           </div>
 
           {/* Original Pareto Chart for reference */}
-          {currentWBSLevel === 1 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Overall Project Pareto Analysis (All Items)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ParetoChart items={items} currency={currency} />
-              </CardContent>
-            </Card>
-          )}
+          <Card>
+            <CardHeader>
+              <CardTitle>Overall Project Pareto Analysis (All Items)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ParetoChart items={items} currency={currency} />
+            </CardContent>
+          </Card>
 
           <InsightsPanel 
             projectId={projectId!} 

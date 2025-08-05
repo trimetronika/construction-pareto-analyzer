@@ -49,19 +49,34 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
     if (req.level === 1) {
       // Level 1: Aggregate by first part of item code (e.g., "1", "2", "3")
       aggregatedItems = await db.queryAll`
+        WITH level1_items AS (
+          SELECT 
+            MIN(id) as id,
+            SPLIT_PART(item_code, '.', 1) as item_code,
+            STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
+            SUM(total_cost) as total_cost,
+            COUNT(*) as item_count,
+            SUM(quantity) as quantity,
+            STRING_AGG(DISTINCT unit, ', ') as unit,
+            AVG(unit_rate) as unit_rate
+          FROM boq_items 
+          WHERE project_id = ${req.projectId}
+            AND item_code IS NOT NULL 
+            AND item_code != ''
+          GROUP BY SPLIT_PART(item_code, '.', 1)
+        )
         SELECT 
-          MIN(id) as id,
-          SPLIT_PART(item_code, '.', 1) as "itemCode",
-          STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
-          SUM(total_cost) as "totalCost",
-          COUNT(*) as "itemCount",
-          SUM(quantity) as quantity,
-          STRING_AGG(DISTINCT unit, ', ') as unit,
-          AVG(unit_rate) as "unitRate"
-        FROM boq_items 
-        WHERE project_id = ${req.projectId}
-        GROUP BY SPLIT_PART(item_code, '.', 1)
-        ORDER BY SUM(total_cost) DESC
+          id,
+          item_code as "itemCode",
+          description,
+          total_cost as "totalCost",
+          item_count as "itemCount",
+          quantity,
+          unit,
+          unit_rate as "unitRate"
+        FROM level1_items
+        WHERE item_code IS NOT NULL AND item_code != ''
+        ORDER BY total_cost DESC
       `;
     } else if (req.level === 2) {
       // Level 2: Aggregate by second level under parent (e.g., "1.1", "1.2" under "1")
@@ -70,22 +85,34 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
       }
       
       aggregatedItems = await db.queryAll`
+        WITH level2_items AS (
+          SELECT 
+            MIN(id) as id,
+            item_code,
+            STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
+            SUM(total_cost) as total_cost,
+            COUNT(*) as item_count,
+            SUM(quantity) as quantity,
+            STRING_AGG(DISTINCT unit, ', ') as unit,
+            AVG(unit_rate) as unit_rate
+          FROM boq_items 
+          WHERE project_id = ${req.projectId} 
+            AND item_code LIKE ${req.parentItemCode + '.%'}
+            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 1
+          GROUP BY item_code
+        )
         SELECT 
-          MIN(id) as id,
-          SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') as "itemCode",
-          STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
-          SUM(total_cost) as "totalCost",
-          COUNT(*) as "itemCount",
-          SUM(quantity) as quantity,
-          STRING_AGG(DISTINCT unit, ', ') as unit,
-          AVG(unit_rate) as "unitRate"
-        FROM boq_items 
-        WHERE project_id = ${req.projectId} 
-          AND item_code LIKE ${req.parentItemCode + '.%'}
-          AND wbs_level >= 2
-        GROUP BY SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+')
-        HAVING SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') IS NOT NULL
-        ORDER BY SUM(total_cost) DESC
+          id,
+          item_code as "itemCode",
+          description,
+          total_cost as "totalCost",
+          item_count as "itemCount",
+          quantity,
+          unit,
+          unit_rate as "unitRate"
+        FROM level2_items
+        WHERE item_code IS NOT NULL AND item_code != ''
+        ORDER BY total_cost DESC
       `;
     } else {
       // Level 3+: Aggregate by third level under parent (e.g., "1.1.1", "1.1.2" under "1.1")
@@ -94,22 +121,34 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
       }
       
       aggregatedItems = await db.queryAll`
+        WITH level3_items AS (
+          SELECT 
+            MIN(id) as id,
+            item_code,
+            STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
+            SUM(total_cost) as total_cost,
+            COUNT(*) as item_count,
+            SUM(quantity) as quantity,
+            STRING_AGG(DISTINCT unit, ', ') as unit,
+            AVG(unit_rate) as unit_rate
+          FROM boq_items 
+          WHERE project_id = ${req.projectId} 
+            AND item_code LIKE ${req.parentItemCode + '.%'}
+            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 2
+          GROUP BY item_code
+        )
         SELECT 
-          MIN(id) as id,
-          SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') as "itemCode",
-          STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
-          SUM(total_cost) as "totalCost",
-          COUNT(*) as "itemCount",
-          SUM(quantity) as quantity,
-          STRING_AGG(DISTINCT unit, ', ') as unit,
-          AVG(unit_rate) as "unitRate"
-        FROM boq_items 
-        WHERE project_id = ${req.projectId} 
-          AND item_code LIKE ${req.parentItemCode + '.%'}
-          AND wbs_level >= 3
-        GROUP BY SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+')
-        HAVING SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') IS NOT NULL
-        ORDER BY SUM(total_cost) DESC
+          id,
+          item_code as "itemCode",
+          description,
+          total_cost as "totalCost",
+          item_count as "itemCount",
+          quantity,
+          unit,
+          unit_rate as "unitRate"
+        FROM level3_items
+        WHERE item_code IS NOT NULL AND item_code != ''
+        ORDER BY total_cost DESC
       `;
     }
     
