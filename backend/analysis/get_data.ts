@@ -18,6 +18,9 @@ export interface Project {
 export interface BoQItem {
   id: number;
   itemCode?: string;
+  itemNumber?: string;
+  generalWork?: string;
+  specificWork?: string;
   description: string;
   quantity: number;
   unit?: string;
@@ -26,6 +29,8 @@ export interface BoQItem {
   cumulativeCost?: number;
   cumulativePercentage?: number;
   isParetoCritical: boolean;
+  wbsLevel: number;
+  parentItemNumber?: string;
 }
 
 export interface GetAnalysisResponse {
@@ -55,9 +60,12 @@ export const getAnalysisData = api<GetAnalysisRequest, GetAnalysisResponse>(
     // Get BoQ items
     const items = await db.queryAll<BoQItem>`
       SELECT 
-        id, item_code as "itemCode", description, quantity, unit, unit_rate as "unitRate",
+        id, item_code as "itemCode", item_number as "itemNumber",
+        general_work as "generalWork", specific_work as "specificWork",
+        description, quantity, unit, unit_rate as "unitRate",
         total_cost as "totalCost", cumulative_cost as "cumulativeCost", 
-        cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical"
+        cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical",
+        wbs_level as "wbsLevel", parent_item_number as "parentItemNumber"
       FROM boq_items 
       WHERE project_id = ${req.projectId}
       ORDER BY total_cost DESC

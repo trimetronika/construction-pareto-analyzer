@@ -13,6 +13,9 @@ export interface ProcessRequest {
 export interface BoQItem {
   id: number;
   itemCode?: string;
+  itemNumber?: string;
+  generalWork?: string;
+  specificWork?: string;
   description: string;
   quantity: number;
   unit?: string;
@@ -21,6 +24,8 @@ export interface BoQItem {
   cumulativeCost?: number;
   cumulativePercentage?: number;
   isParetoCritical: boolean;
+  wbsLevel: number;
+  parentItemNumber?: string;
 }
 
 export interface ProcessResponse {
@@ -71,14 +76,28 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
       const unitRate = parseFloat(rowData['Unit Rate'] || rowData.unitRate || rowData.Rate || rowData.rate || '0');
       const totalCost = parseFloat(rowData['Total Cost'] || rowData.totalCost || rowData.Total || rowData.total || '0') || (quantity * unitRate);
       
+      // WBS-related columns
+      const itemNumber = rowData['Item Number'] || rowData.itemNumber || rowData['Item No'] || rowData.itemNo || '';
+      const generalWork = rowData['General Work'] || rowData.generalWork || rowData['General'] || rowData.general || '';
+      const specificWork = rowData['Specific Work'] || rowData.specificWork || rowData['Specific'] || rowData.specific || '';
+      
       if (description && totalCost > 0) {
+        // Determine WBS level from item number
+        const wbsLevel = determineWBSLevel(itemNumber);
+        const parentItemNumber = getParentItemNumber(itemNumber);
+        
         items.push({
           itemCode: rowData['Item Code'] || rowData.itemCode || rowData.Code || rowData.code || null,
+          itemNumber: itemNumber || null,
+          generalWork: generalWork || null,
+          specificWork: specificWork || null,
           description,
           quantity,
           unit: rowData.Unit || rowData.unit || null,
           unitRate,
-          totalCost
+          totalCost,
+          wbsLevel,
+          parentItemNumber
         });
       }
     }
@@ -107,12 +126,15 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
       // Insert into database
       await db.exec`
         INSERT INTO boq_items (
-          project_id, item_code, description, quantity, unit, unit_rate, 
-          total_cost, cumulative_cost, cumulative_percentage, is_pareto_critical
+          project_id, item_code, item_number, general_work, specific_work, description, 
+          quantity, unit, unit_rate, total_cost, cumulative_cost, cumulative_percentage, 
+          is_pareto_critical, wbs_level, parent_item_number
         ) VALUES (
-          ${req.projectId}, ${items[i].itemCode}, ${items[i].description}, 
+          ${req.projectId}, ${items[i].itemCode}, ${items[i].itemNumber}, 
+          ${items[i].generalWork}, ${items[i].specificWork}, ${items[i].description}, 
           ${items[i].quantity}, ${items[i].unit}, ${items[i].unitRate},
-          ${items[i].totalCost}, ${cumulativeCost}, ${cumulativePercentage}, ${isParetoCritical}
+          ${items[i].totalCost}, ${cumulativeCost}, ${cumulativePercentage}, 
+          ${isParetoCritical}, ${items[i].wbsLevel}, ${items[i].parentItemNumber}
         )
       `;
       
@@ -129,9 +151,12 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
     // Get processed items from database with IDs
     const processedItems = await db.queryAll<BoQItem>`
       SELECT 
-        id, item_code as "itemCode", description, quantity, unit, unit_rate as "unitRate",
+        id, item_code as "itemCode", item_number as "itemNumber", 
+        general_work as "generalWork", specific_work as "specificWork",
+        description, quantity, unit, unit_rate as "unitRate",
         total_cost as "totalCost", cumulative_cost as "cumulativeCost", 
-        cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical"
+        cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical",
+        wbs_level as "wbsLevel", parent_item_number as "parentItemNumber"
       FROM boq_items 
       WHERE project_id = ${req.projectId}
       ORDER BY total_cost DESC
@@ -146,3 +171,22 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
     };
   }
 );
+
+function determineWBSLevel(itemNumber: string): number {
+  if (!itemNumber) return 1;
+  
+  // Count the number of dots to determine level
+  // e.g., "1" = level 1, "1.1" = level 2, "1.1.1" = level 3
+  const parts = itemNumber.split('.');
+  return parts.length;
+}
+
+function getParentItemNumber(itemNumber: string): string | null {
+  if (!itemNumber) return null;
+  
+  const parts = itemNumber.split('.');
+  if (parts.length <= 1) return null;
+  
+  // Return parent item number (remove last part)
+  return parts.slice(0, -1).join('.');
+}
