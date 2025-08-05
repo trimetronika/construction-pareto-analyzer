@@ -52,7 +52,11 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
         WITH level1_items AS (
           SELECT 
             MIN(id) as id,
-            SPLIT_PART(item_code, '.', 1) as item_code,
+            CASE 
+              WHEN item_code ~ '^[0-9]+$' THEN item_code
+              WHEN item_code ~ '^[0-9]+\.' THEN SPLIT_PART(item_code, '.', 1)
+              ELSE item_code
+            END as item_code,
             STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
             SUM(total_cost) as total_cost,
             COUNT(*) as item_count,
@@ -63,7 +67,11 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
           WHERE project_id = ${req.projectId}
             AND item_code IS NOT NULL 
             AND item_code != ''
-          GROUP BY SPLIT_PART(item_code, '.', 1)
+          GROUP BY CASE 
+            WHEN item_code ~ '^[0-9]+$' THEN item_code
+            WHEN item_code ~ '^[0-9]+\.' THEN SPLIT_PART(item_code, '.', 1)
+            ELSE item_code
+          END
         )
         SELECT 
           id,
@@ -98,7 +106,7 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
           FROM boq_items 
           WHERE project_id = ${req.projectId} 
             AND item_code LIKE ${req.parentItemCode + '.%'}
-            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 1
+            AND item_code ~ ${'^' + req.parentItemCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.[0-9]+$'}
           GROUP BY item_code
         )
         SELECT 
@@ -134,7 +142,7 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
           FROM boq_items 
           WHERE project_id = ${req.projectId} 
             AND item_code LIKE ${req.parentItemCode + '.%'}
-            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 2
+            AND item_code ~ ${'^' + req.parentItemCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.[0-9]+$'}
           GROUP BY item_code
         )
         SELECT 

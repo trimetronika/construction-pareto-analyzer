@@ -69,7 +69,8 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
       const rowData = row as any;
       
       // Try to identify columns (flexible mapping)
-      const itemCode = rowData['Item Code'] || rowData.itemCode || rowData['Code'] || rowData.code || '';
+      const itemCodeRaw = rowData['Item Code'] || rowData.itemCode || rowData['Code'] || rowData.code || '';
+      const itemCode = itemCodeRaw ? String(itemCodeRaw).trim() : '';
       const description = rowData.Description || rowData.description || rowData.Item || rowData.item || '';
       const quantity = parseFloat(rowData.Quantity || rowData.quantity || rowData.Qty || rowData.qty || '0');
       const unit = rowData.Unit || rowData.unit || '';
@@ -82,7 +83,7 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
         const parentItemCode = getParentItemCode(itemCode);
         
         items.push({
-          itemCode: itemCode.toString(),
+          itemCode: itemCode,
           description,
           quantity,
           unit: unit || null,
@@ -163,7 +164,7 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
 );
 
 function determineWBSLevelFromCode(itemCode: string): number {
-  if (!itemCode) return 1;
+  if (!itemCode || typeof itemCode !== 'string') return 1;
   
   // Count the number of dots to determine level
   // e.g., "1" = level 1, "1.1" = level 2, "1.1.1" = level 3
@@ -172,7 +173,7 @@ function determineWBSLevelFromCode(itemCode: string): number {
 }
 
 function getParentItemCode(itemCode: string): string | null {
-  if (!itemCode) return null;
+  if (!itemCode || typeof itemCode !== 'string') return null;
   
   const parts = itemCode.split('.');
   if (parts.length <= 1) return null;
