@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
+import { formatCurrency, Currency } from '../utils/currency';
 
 Chart.register(...registerables);
 
@@ -13,9 +14,10 @@ interface BoQItem {
 
 interface ParetoChartProps {
   items: BoQItem[];
+  currency?: Currency;
 }
 
-export default function ParetoChart({ items }: ParetoChartProps) {
+export default function ParetoChart({ items, currency = 'USD' }: ParetoChartProps) {
   const chartRef = useRef<HTMLCanvasElement>(null);
   const chartInstance = useRef<Chart | null>(null);
 
@@ -80,7 +82,7 @@ export default function ParetoChart({ items }: ParetoChartProps) {
             callbacks: {
               label: function(context) {
                 if (context.datasetIndex === 0) {
-                  return `Cost: $${context.parsed.y.toLocaleString()}`;
+                  return `Cost: ${formatCurrency(context.parsed.y, currency)}`;
                 } else {
                   return `Cumulative: ${context.parsed.y.toFixed(1)}%`;
                 }
@@ -106,11 +108,11 @@ export default function ParetoChart({ items }: ParetoChartProps) {
             position: 'left',
             title: {
               display: true,
-              text: 'Cost ($)'
+              text: `Cost (${currency})`
             },
             ticks: {
               callback: function(value) {
-                return '$' + (value as number).toLocaleString();
+                return formatCurrency(value as number, currency);
               }
             }
           },
@@ -142,7 +144,7 @@ export default function ParetoChart({ items }: ParetoChartProps) {
         chartInstance.current.destroy();
       }
     };
-  }, [items]);
+  }, [items, currency]);
 
   if (items.length === 0) {
     return (

@@ -17,11 +17,14 @@ import {
 import backend from '~backend/client';
 import ParetoChart from '../components/ParetoChart';
 import InsightsPanel from '../components/InsightsPanel';
+import CurrencySelector, { Currency } from '../components/CurrencySelector';
+import { formatCurrency } from '../utils/currency';
 
 export default function ProjectAnalysis() {
   const { projectId } = useParams<{ projectId: string }>();
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
+  const [currency, setCurrency] = useState<Currency>('USD');
   const { toast } = useToast();
 
   const { data: analysisData, isLoading: isLoadingAnalysis, refetch: refetchAnalysis } = useQuery({
@@ -82,15 +85,6 @@ export default function ProjectAnalysis() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(amount);
-  };
-
   if (isLoadingAnalysis) {
     return (
       <div className="space-y-6">
@@ -135,7 +129,8 @@ export default function ProjectAnalysis() {
             {project.fileName} • Uploaded {new Date(project.uploadedAt).toLocaleDateString()}
           </p>
         </div>
-        <div className="flex space-x-3">
+        <div className="flex items-center space-x-3">
+          <CurrencySelector currency={currency} onCurrencyChange={setCurrency} />
           {needsProcessing && (
             <Button 
               onClick={handleProcessSpreadsheet}
@@ -211,7 +206,7 @@ export default function ProjectAnalysis() {
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{formatCurrency(totalProjectCost)}</div>
+                <div className="text-2xl font-bold">{formatCurrency(totalProjectCost, currency)}</div>
               </CardContent>
             </Card>
 
@@ -235,7 +230,7 @@ export default function ProjectAnalysis() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {insightsData ? formatCurrency(insightsData.totalPotentialSavings) : '-'}
+                  {insightsData ? formatCurrency(insightsData.totalPotentialSavings, currency) : '-'}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   From AI recommendations
@@ -250,7 +245,7 @@ export default function ProjectAnalysis() {
                 <CardTitle>Pareto Analysis Chart</CardTitle>
               </CardHeader>
               <CardContent>
-                <ParetoChart items={items} />
+                <ParetoChart items={items} currency={currency} />
               </CardContent>
             </Card>
 
@@ -267,11 +262,11 @@ export default function ProjectAnalysis() {
                           {item.description}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {item.quantity} {item.unit} × {formatCurrency(item.unitRate)}
+                          {item.quantity} {item.unit} × {formatCurrency(item.unitRate, currency)}
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm font-bold">{formatCurrency(item.totalCost)}</p>
+                        <p className="text-sm font-bold">{formatCurrency(item.totalCost, currency)}</p>
                         <Badge variant="secondary" className="text-xs">
                           {item.cumulativePercentage?.toFixed(1)}%
                         </Badge>
@@ -287,6 +282,7 @@ export default function ProjectAnalysis() {
             projectId={projectId!} 
             insights={insightsData?.insights || []}
             isLoading={isLoadingInsights}
+            currency={currency}
           />
         </>
       )}

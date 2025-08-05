@@ -10,6 +10,7 @@ import {
   DollarSign,
   Target
 } from 'lucide-react';
+import { formatCurrency, Currency } from '../utils/currency';
 
 interface AIInsight {
   id: number;
@@ -26,18 +27,10 @@ interface InsightsPanelProps {
   projectId: string;
   insights: AIInsight[];
   isLoading: boolean;
+  currency?: Currency;
 }
 
-export default function InsightsPanel({ projectId, insights, isLoading }: InsightsPanelProps) {
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(amount);
-  };
-
+export default function InsightsPanel({ projectId, insights, isLoading, currency = 'USD' }: InsightsPanelProps) {
   const getInsightIcon = (type: string) => {
     switch (type) {
       case 'cost_concentration': return <AlertTriangle className="h-5 w-5 text-orange-500" />;
@@ -114,7 +107,7 @@ export default function InsightsPanel({ projectId, insights, isLoading }: Insigh
                     <div className="text-right">
                       <p className="text-sm text-gray-500">Potential Savings</p>
                       <p className="text-lg font-bold text-green-600">
-                        {formatCurrency(insight.potentialSavings)}
+                        {formatCurrency(insight.potentialSavings, currency)}
                       </p>
                     </div>
                   )}
@@ -151,7 +144,7 @@ export default function InsightsPanel({ projectId, insights, isLoading }: Insigh
               <p className="text-sm text-blue-800">
                 {insights.length} optimization opportunities identified with potential savings of{' '}
                 <span className="font-bold">
-                  {formatCurrency(insights.reduce((sum, insight) => sum + (insight.potentialSavings || 0), 0))}
+                  {formatCurrency(insights.reduce((sum, insight) => sum + (insight.potentialSavings || 0), 0), currency)}
                 </span>
                 . Implementing these recommendations could reduce project costs by{' '}
                 {((insights.reduce((sum, insight) => sum + (insight.potentialSavings || 0), 0) / 1000000) * 100).toFixed(1)}%.
