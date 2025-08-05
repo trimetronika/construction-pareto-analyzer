@@ -6,26 +6,27 @@ const db = SQLDatabase.named("construction");
 export interface GetWBSDataRequest {
   projectId: string;
   level: number;
-  parentItemNumber?: string;
+  parentItemCode?: string;
 }
 
 export interface WBSItem {
   id: number;
-  itemNumber?: string;
-  generalWork?: string;
-  specificWork?: string;
+  itemCode: string;
   description: string;
   totalCost: number;
   cumulativeCost: number;
   cumulativePercentage: number;
   isParetoCritical: boolean;
   itemCount: number;
+  quantity?: number;
+  unit?: string;
+  unitRate?: number;
 }
 
 export interface GetWBSDataResponse {
   projectId: string;
   level: number;
-  parentItemNumber?: string;
+  parentItemCode?: string;
   totalCost: number;
   items: WBSItem[];
 }
@@ -46,66 +47,80 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
     let aggregatedItems: any[] = [];
     
     if (req.level === 1) {
-      // Level 1: Aggregate by General Work
+      // Level 1: Aggregate by first part of item code (e.g., "1", "2", "3")
       aggregatedItems = await db.queryAll`
         SELECT 
           MIN(id) as id,
-          general_work as "generalWork",
-          MIN(item_number) as "itemNumber",
-          general_work as description,
+          SPLIT_PART(item_code, '.', 1) as "itemCode",
+          STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
           SUM(total_cost) as "totalCost",
-          COUNT(*) as "itemCount"
+          COUNT(*) as "itemCount",
+          SUM(quantity) as quantity,
+          STRING_AGG(DISTINCT unit, ', ') as unit,
+          AVG(unit_rate) as "unitRate"
         FROM boq_items 
-        WHERE project_id = ${req.projectId} AND general_work IS NOT NULL
-        GROUP BY general_work
+        WHERE project_id = ${req.projectId}
+        GROUP BY SPLIT_PART(item_code, '.', 1)
         ORDER BY SUM(total_cost) DESC
       `;
     } else if (req.level === 2) {
-      // Level 2: Aggregate by Specific Work under a General Work
-      if (!req.parentItemNumber) {
-        throw APIError.invalidArgument("Parent item number required for level 2");
+      // Level 2: Aggregate by second level under parent (e.g., "1.1", "1.2" under "1")
+      if (!req.parentItemCode) {
+        throw APIError.invalidArgument("Parent item code required for level 2");
       }
       
       aggregatedItems = await db.queryAll`
         SELECT 
           MIN(id) as id,
-          specific_work as "specificWork",
-          MIN(item_number) as "itemNumber",
-          specific_work as description,
+          SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') as "itemCode",
+          STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
           SUM(total_cost) as "totalCost",
-          COUNT(*) as "itemCount"
+          COUNT(*) as "itemCount",
+          SUM(quantity) as quantity,
+          STRING_AGG(DISTINCT unit, ', ') as unit,
+          AVG(unit_rate) as "unitRate"
         FROM boq_items 
         WHERE project_id = ${req.projectId} 
-          AND specific_work IS NOT NULL
-          AND (item_number LIKE ${req.parentItemNumber + '.%'} OR parent_item_number = ${req.parentItemNumber})
-        GROUP BY specific_work
+          AND item_code LIKE ${req.parentItemCode + '.%'}
+          AND wbs_level >= 2
+        GROUP BY SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+')
+        HAVING SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') IS NOT NULL
         ORDER BY SUM(total_cost) DESC
       `;
     } else {
-      // Level 3+: Individual items under a specific parent
-      if (!req.parentItemNumber) {
-        throw APIError.invalidArgument("Parent item number required for level 3+");
+      // Level 3+: Aggregate by third level under parent (e.g., "1.1.1", "1.1.2" under "1.1")
+      if (!req.parentItemCode) {
+        throw APIError.invalidArgument("Parent item code required for level 3+");
       }
       
       aggregatedItems = await db.queryAll`
         SELECT 
-          id,
-          item_number as "itemNumber",
-          description,
-          total_cost as "totalCost",
-          1 as "itemCount"
+          MIN(id) as id,
+          SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') as "itemCode",
+          STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
+          SUM(total_cost) as "totalCost",
+          COUNT(*) as "itemCount",
+          SUM(quantity) as quantity,
+          STRING_AGG(DISTINCT unit, ', ') as unit,
+          AVG(unit_rate) as "unitRate"
         FROM boq_items 
         WHERE project_id = ${req.projectId} 
-          AND parent_item_number = ${req.parentItemNumber}
-        ORDER BY total_cost DESC
+          AND item_code LIKE ${req.parentItemCode + '.%'}
+          AND wbs_level >= 3
+        GROUP BY SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+')
+        HAVING SUBSTRING(item_code FROM '^${req.parentItemCode}\\.\\d+') IS NOT NULL
+        ORDER BY SUM(total_cost) DESC
       `;
     }
+    
+    // Filter out null item codes and empty results
+    aggregatedItems = aggregatedItems.filter(item => item.itemCode && item.totalCost > 0);
     
     if (aggregatedItems.length === 0) {
       return {
         projectId: req.projectId,
         level: req.level,
-        parentItemNumber: req.parentItemNumber,
+        parentItemCode: req.parentItemCode,
         totalCost: 0,
         items: []
       };
@@ -122,22 +137,23 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
       
       return {
         id: item.id,
-        itemNumber: item.itemNumber,
-        generalWork: item.generalWork,
-        specificWork: item.specificWork,
+        itemCode: item.itemCode,
         description: item.description,
         totalCost: item.totalCost,
         cumulativeCost,
         cumulativePercentage,
         isParetoCritical,
-        itemCount: item.itemCount
+        itemCount: item.itemCount,
+        quantity: item.quantity,
+        unit: item.unit,
+        unitRate: item.unitRate
       };
     });
     
     return {
       projectId: req.projectId,
       level: req.level,
-      parentItemNumber: req.parentItemNumber,
+      parentItemCode: req.parentItemCode,
       totalCost,
       items: processedItems
     };

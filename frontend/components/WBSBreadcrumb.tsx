@@ -4,13 +4,13 @@ import { Button } from '@/components/ui/button';
 
 export interface WBSLevel {
   level: number;
-  itemNumber?: string;
+  itemCode?: string;
   description: string;
 }
 
 interface WBSBreadcrumbProps {
   levels: WBSLevel[];
-  onLevelClick: (level: number, itemNumber?: string) => void;
+  onLevelClick: (level: number, itemCode?: string) => void;
 }
 
 export default function WBSBreadcrumb({ levels, onLevelClick }: WBSBreadcrumbProps) {
@@ -25,10 +25,10 @@ export default function WBSBreadcrumb({ levels, onLevelClick }: WBSBreadcrumbPro
           <Button
             variant={index === levels.length - 1 ? "default" : "ghost"}
             size="sm"
-            onClick={() => onLevelClick(level.level, level.itemNumber)}
+            onClick={() => onLevelClick(level.level, level.itemCode)}
             className="text-xs"
           >
-            Level {level.level}: {level.description}
+            {level.itemCode ? `${level.itemCode}: ${level.description}` : level.description}
           </Button>
         </React.Fragment>
       ))}

@@ -17,10 +17,8 @@ export interface Project {
 
 export interface BoQItem {
   id: number;
-  itemCode?: string;
+  itemCode: string;
   itemNumber?: string;
-  generalWork?: string;
-  specificWork?: string;
   description: string;
   quantity: number;
   unit?: string;
@@ -61,7 +59,6 @@ export const getAnalysisData = api<GetAnalysisRequest, GetAnalysisResponse>(
     const items = await db.queryAll<BoQItem>`
       SELECT 
         id, item_code as "itemCode", item_number as "itemNumber",
-        general_work as "generalWork", specific_work as "specificWork",
         description, quantity, unit, unit_rate as "unitRate",
         total_cost as "totalCost", cumulative_cost as "cumulativeCost", 
         cumulative_percentage as "cumulativePercentage", is_pareto_critical as "isParetoCritical",

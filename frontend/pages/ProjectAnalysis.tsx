@@ -31,7 +31,7 @@ export default function ProjectAnalysis() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [currency, setCurrency] = useState<Currency>('USD');
   const [currentWBSLevel, setCurrentWBSLevel] = useState(1);
-  const [currentParentItem, setCurrentParentItem] = useState<string | undefined>();
+  const [currentParentItemCode, setCurrentParentItemCode] = useState<string | undefined>();
   const [wbsPath, setWbsPath] = useState<WBSLevel[]>([{ level: 1, description: 'Project Overview' }]);
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -43,11 +43,11 @@ export default function ProjectAnalysis() {
   });
 
   const { data: wbsData, isLoading: isLoadingWBS, refetch: refetchWBS } = useQuery({
-    queryKey: ['wbs', projectId, currentWBSLevel, currentParentItem],
+    queryKey: ['wbs', projectId, currentWBSLevel, currentParentItemCode],
     queryFn: () => backend.analysis.getWBSData({ 
       projectId: projectId!, 
       level: currentWBSLevel,
-      parentItemNumber: currentParentItem
+      parentItemCode: currentParentItemCode
     }),
     enabled: !!projectId && analysisData?.project.status === 'processed'
   });
@@ -135,23 +135,23 @@ export default function ProjectAnalysis() {
     if (currentWBSLevel >= 3) return; // Max 3 levels
 
     const newLevel = currentWBSLevel + 1;
-    const newParentItem = item.itemNumber;
+    const newParentItemCode = item.itemCode;
     
     setCurrentWBSLevel(newLevel);
-    setCurrentParentItem(newParentItem);
+    setCurrentParentItemCode(newParentItemCode);
     
     // Update breadcrumb path
     const newPath = [...wbsPath, {
       level: newLevel,
-      itemNumber: newParentItem,
+      itemCode: newParentItemCode,
       description: item.description
     }];
     setWbsPath(newPath);
   };
 
-  const handleBreadcrumbClick = (level: number, itemNumber?: string) => {
+  const handleBreadcrumbClick = (level: number, itemCode?: string) => {
     setCurrentWBSLevel(level);
-    setCurrentParentItem(itemNumber);
+    setCurrentParentItemCode(itemCode);
     
     // Update breadcrumb path
     const newPath = wbsPath.slice(0, level);
@@ -391,12 +391,17 @@ export default function ProjectAnalysis() {
                     >
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">
-                          {item.description}
+                          {item.itemCode}: {item.description}
                         </p>
-                        <p className="text-xs text-gray-500">
-                          {item.itemNumber && `Item: ${item.itemNumber} • `}
-                          {item.itemCount} sub-item{item.itemCount !== 1 ? 's' : ''}
-                        </p>
+                        <div className="text-xs text-gray-500 space-y-1">
+                          <p>{item.itemCount} sub-item{item.itemCount !== 1 ? 's' : ''}</p>
+                          {item.quantity && (
+                            <p>Qty: {item.quantity.toLocaleString()} {item.unit}</p>
+                          )}
+                          {item.unitRate && (
+                            <p>Rate: {formatCurrency(item.unitRate, currency)}</p>
+                          )}
+                        </div>
                       </div>
                       <div className="text-right">
                         <p className="text-sm font-bold">{formatCurrency(item.totalCost, currency)}</p>

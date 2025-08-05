@@ -98,7 +98,7 @@ export default function UploadProject() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Upload New Project</h1>
         <p className="text-gray-600 mt-2">
-          Upload a construction project spreadsheet for WBS-based Pareto analysis and AI-driven insights.
+          Upload a construction project spreadsheet for Item Code-based WBS Pareto analysis and AI-driven insights.
         </p>
       </div>
 
@@ -150,14 +150,16 @@ export default function UploadProject() {
               <div className="flex items-start space-x-3">
                 <AlertCircle className="h-5 w-5 text-blue-600 mt-0.5" />
                 <div className="text-sm text-blue-800">
-                  <p className="font-medium mb-1">WBS Spreadsheet Format Requirements:</p>
+                  <p className="font-medium mb-1">Item Code-based WBS Spreadsheet Format:</p>
                   <ul className="list-disc list-inside space-y-1">
-                    <li><strong>Required columns:</strong> Description, Quantity, Unit Rate, Total Cost</li>
-                    <li><strong>WBS columns:</strong> Item Number (e.g., "1.1", "2.3"), General Work, Specific Work</li>
-                    <li><strong>Optional columns:</strong> Item Code, Unit</li>
+                    <li><strong>Required columns:</strong> Item Code, Description, Quantity, Unit, Unit Rate, Total Cost</li>
+                    <li><strong>Item Code format:</strong> Determines WBS hierarchy automatically</li>
+                    <li className="ml-4">• Level 1: "1", "2", "3"</li>
+                    <li className="ml-4">• Level 2: "1.1", "2.3", "3.4"</li>
+                    <li className="ml-4">• Level 3: "1.1.1", "2.3.2", etc.</li>
                     <li>First row should contain column headers</li>
-                    <li>Item Number format determines WBS hierarchy (1 = Level 1, 1.1 = Level 2, 1.1.1 = Level 3)</li>
                     <li>Ensure all cost values are numeric</li>
+                    <li>Item Code must be unique for each row</li>
                   </ul>
                 </div>
               </div>

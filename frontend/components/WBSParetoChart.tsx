@@ -6,15 +6,16 @@ Chart.register(...registerables);
 
 export interface WBSItem {
   id: number;
-  itemNumber?: string;
-  generalWork?: string;
-  specificWork?: string;
+  itemCode: string;
   description: string;
   totalCost: number;
   cumulativeCost: number;
   cumulativePercentage: number;
   isParetoCritical: boolean;
   itemCount: number;
+  quantity?: number;
+  unit?: string;
+  unitRate?: number;
 }
 
 interface WBSParetoChartProps {
@@ -42,8 +43,8 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
     // Prepare data for top 20 items
     const topItems = items.slice(0, 20);
     const labels = topItems.map((item, index) => {
-      const truncatedDesc = item.description.substring(0, 25);
-      return `${index + 1}. ${truncatedDesc}${item.description.length > 25 ? '...' : ''}`;
+      const truncatedDesc = item.description.substring(0, 20);
+      return `${item.itemCode}: ${truncatedDesc}${item.description.length > 20 ? '...' : ''}`;
     });
     const costs = topItems.map(item => item.totalCost);
     const cumulativePercentages = topItems.map(item => item.cumulativePercentage);
@@ -102,18 +103,29 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
               label: function(context) {
                 if (context.datasetIndex === 0) {
                   const item = topItems[context.dataIndex];
-                  return [
+                  const tooltipLines = [
                     `Cost: ${formatCurrency(context.parsed.y, currency)}`,
-                    `Items: ${item.itemCount}`,
-                    item.itemNumber ? `Item #: ${item.itemNumber}` : ''
-                  ].filter(Boolean);
+                    `Sub-items: ${item.itemCount}`
+                  ];
+                  
+                  if (item.quantity) {
+                    tooltipLines.push(`Quantity: ${item.quantity.toLocaleString()}`);
+                  }
+                  if (item.unit) {
+                    tooltipLines.push(`Unit: ${item.unit}`);
+                  }
+                  if (item.unitRate) {
+                    tooltipLines.push(`Unit Rate: ${formatCurrency(item.unitRate, currency)}`);
+                  }
+                  
+                  return tooltipLines;
                 } else {
                   return `Cumulative: ${context.parsed.y.toFixed(1)}%`;
                 }
               },
               title: function(context) {
                 const item = topItems[context[0].dataIndex];
-                return item.description;
+                return `${item.itemCode}: ${item.description}`;
               }
             }
           }
