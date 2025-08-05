@@ -103,15 +103,19 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
     // Sort by total cost (descending) for proper Pareto analysis
     items.sort((a, b) => b.totalCost - a.totalCost);
     
-    // Calculate cumulative values and Pareto analysis
-    const totalProjectCost = items.reduce((sum, item) => sum + item.totalCost, 0);
+    // Calculate total project cost from Level 1 items only (to avoid double counting)
+    const level1Items = items.filter(item => item.wbsLevel === 1);
+    const totalProjectCost = level1Items.reduce((sum, item) => sum + item.totalCost, 0);
+    
+    // Calculate cumulative values and Pareto analysis for ALL items (for overall chart)
+    const allItemsTotalCost = items.reduce((sum, item) => sum + item.totalCost, 0);
     let cumulativeCost = 0;
     let paretoCriticalItems = 0;
     
     // Insert items and calculate cumulative values
     for (let i = 0; i < items.length; i++) {
       cumulativeCost += items[i].totalCost;
-      const cumulativePercentage = (cumulativeCost / totalProjectCost) * 100;
+      const cumulativePercentage = (cumulativeCost / allItemsTotalCost) * 100;
       const isParetoCritical = cumulativePercentage <= 80;
       
       if (isParetoCritical) {
@@ -159,7 +163,7 @@ export const processSpreadsheet = api<ProcessRequest, ProcessResponse>(
     return {
       projectId: req.projectId,
       totalItems: items.length,
-      totalProjectCost,
+      totalProjectCost, // This is now calculated from Level 1 items only
       paretoCriticalItems,
       items: processedItems
     };

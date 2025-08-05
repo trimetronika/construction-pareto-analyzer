@@ -44,128 +44,63 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
       throw APIError.notFound("Project not found");
     }
     
-    let aggregatedItems: any[] = [];
+    let items: any[] = [];
     
     if (req.level === 1) {
-      // Level 1: Aggregate by first part of item code (e.g., "1", "2", "3")
-      aggregatedItems = await db.queryAll`
-        WITH level1_items AS (
-          SELECT 
-            MIN(id) as id,
-            CASE 
-              WHEN item_code ~ '^[0-9]+$' THEN item_code
-              WHEN item_code ~ '^[0-9]+\.' THEN SPLIT_PART(item_code, '.', 1)
-              ELSE item_code
-            END as item_code,
-            STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
-            SUM(total_cost) as total_cost,
-            COUNT(*) as item_count,
-            SUM(quantity) as quantity,
-            STRING_AGG(DISTINCT unit, ', ') as unit,
-            AVG(unit_rate) as unit_rate
-          FROM boq_items 
-          WHERE project_id = ${req.projectId}
-            AND item_code IS NOT NULL 
-            AND item_code != ''
-          GROUP BY CASE 
-            WHEN item_code ~ '^[0-9]+$' THEN item_code
-            WHEN item_code ~ '^[0-9]+\.' THEN SPLIT_PART(item_code, '.', 1)
-            ELSE item_code
-          END
-        )
+      // Level 1: Get only items with WBS level 1 (no dots in item code)
+      items = await db.queryAll`
         SELECT 
-          id,
-          item_code as "itemCode",
-          description,
-          total_cost as "totalCost",
-          item_count as "itemCount",
-          quantity,
-          unit,
-          unit_rate as "unitRate"
-        FROM level1_items
-        WHERE item_code IS NOT NULL AND item_code != ''
+          id, item_code as "itemCode", description, total_cost as "totalCost",
+          1 as "itemCount", quantity, unit, unit_rate as "unitRate"
+        FROM boq_items 
+        WHERE project_id = ${req.projectId} 
+          AND wbs_level = 1
+          AND item_code IS NOT NULL 
+          AND item_code != ''
         ORDER BY total_cost DESC
       `;
     } else if (req.level === 2) {
-      // Level 2: Get items that start with parent code followed by a dot and another number
+      // Level 2: Get items that are direct children of the parent (one level deeper)
       if (!req.parentItemCode) {
         throw APIError.invalidArgument("Parent item code required for level 2");
       }
       
-      aggregatedItems = await db.queryAll`
-        WITH level2_items AS (
-          SELECT 
-            MIN(id) as id,
-            item_code,
-            STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
-            SUM(total_cost) as total_cost,
-            COUNT(*) as item_count,
-            SUM(quantity) as quantity,
-            STRING_AGG(DISTINCT unit, ', ') as unit,
-            AVG(unit_rate) as unit_rate
-          FROM boq_items 
-          WHERE project_id = ${req.projectId} 
-            AND item_code LIKE ${req.parentItemCode + '.%'}
-            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 1
-            AND item_code != ${req.parentItemCode}
-          GROUP BY item_code
-        )
+      items = await db.queryAll`
         SELECT 
-          id,
-          item_code as "itemCode",
-          description,
-          total_cost as "totalCost",
-          item_count as "itemCount",
-          quantity,
-          unit,
-          unit_rate as "unitRate"
-        FROM level2_items
-        WHERE item_code IS NOT NULL AND item_code != ''
+          id, item_code as "itemCode", description, total_cost as "totalCost",
+          1 as "itemCount", quantity, unit, unit_rate as "unitRate"
+        FROM boq_items 
+        WHERE project_id = ${req.projectId} 
+          AND wbs_level = 2
+          AND item_code LIKE ${req.parentItemCode + '.%'}
+          AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 1
+          AND item_code != ${req.parentItemCode}
         ORDER BY total_cost DESC
       `;
-    } else {
-      // Level 3: Get items that start with parent code followed by a dot and another number
+    } else if (req.level === 3) {
+      // Level 3: Get items that are direct children of the parent (one level deeper)
       if (!req.parentItemCode) {
-        throw APIError.invalidArgument("Parent item code required for level 3+");
+        throw APIError.invalidArgument("Parent item code required for level 3");
       }
       
-      aggregatedItems = await db.queryAll`
-        WITH level3_items AS (
-          SELECT 
-            MIN(id) as id,
-            item_code,
-            STRING_AGG(DISTINCT description, ' / ' ORDER BY description) as description,
-            SUM(total_cost) as total_cost,
-            COUNT(*) as item_count,
-            SUM(quantity) as quantity,
-            STRING_AGG(DISTINCT unit, ', ') as unit,
-            AVG(unit_rate) as unit_rate
-          FROM boq_items 
-          WHERE project_id = ${req.projectId} 
-            AND item_code LIKE ${req.parentItemCode + '.%'}
-            AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 2
-            AND item_code != ${req.parentItemCode}
-          GROUP BY item_code
-        )
+      items = await db.queryAll`
         SELECT 
-          id,
-          item_code as "itemCode",
-          description,
-          total_cost as "totalCost",
-          item_count as "itemCount",
-          quantity,
-          unit,
-          unit_rate as "unitRate"
-        FROM level3_items
-        WHERE item_code IS NOT NULL AND item_code != ''
+          id, item_code as "itemCode", description, total_cost as "totalCost",
+          1 as "itemCount", quantity, unit, unit_rate as "unitRate"
+        FROM boq_items 
+        WHERE project_id = ${req.projectId} 
+          AND wbs_level = 3
+          AND item_code LIKE ${req.parentItemCode + '.%'}
+          AND LENGTH(item_code) - LENGTH(REPLACE(item_code, '.', '')) = 2
+          AND item_code != ${req.parentItemCode}
         ORDER BY total_cost DESC
       `;
     }
     
     // Filter out null item codes and empty results
-    aggregatedItems = aggregatedItems.filter(item => item.itemCode && item.totalCost > 0);
+    items = items.filter(item => item.itemCode && item.totalCost > 0);
     
-    if (aggregatedItems.length === 0) {
+    if (items.length === 0) {
       return {
         projectId: req.projectId,
         level: req.level,
@@ -175,11 +110,11 @@ export const getWBSData = api<GetWBSDataRequest, GetWBSDataResponse>(
       };
     }
     
-    // Calculate cumulative values and Pareto analysis
-    const totalCost = aggregatedItems.reduce((sum, item) => sum + item.totalCost, 0);
+    // Calculate cumulative values and Pareto analysis for this specific level
+    const totalCost = items.reduce((sum, item) => sum + item.totalCost, 0);
     let cumulativeCost = 0;
     
-    const processedItems = aggregatedItems.map((item, index) => {
+    const processedItems = items.map((item, index) => {
       cumulativeCost += item.totalCost;
       const cumulativePercentage = (cumulativeCost / totalCost) * 100;
       const isParetoCritical = cumulativePercentage <= 80;

@@ -13,7 +13,8 @@ import {
   Lightbulb,
   Download,
   Play,
-  Trash2
+  Trash2,
+  ArrowLeft
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import backend from '~backend/client';
@@ -177,6 +178,11 @@ export default function ProjectAnalysis() {
     });
     
     setWbsLevels(newWbsLevels);
+  };
+
+  const handleBackToLevel = (targetLevel: number) => {
+    // Reset to the target level
+    setWbsLevels(wbsLevels.slice(0, targetLevel));
   };
 
   const getWBSData = (level: number) => {
@@ -354,6 +360,9 @@ export default function ProjectAnalysis() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{formatCurrency(totalProjectCost, currency)}</div>
+                <p className="text-xs text-muted-foreground">
+                  Based on Level 1 items
+                </p>
               </CardContent>
             </Card>
 
@@ -385,6 +394,41 @@ export default function ProjectAnalysis() {
               </CardContent>
             </Card>
           </div>
+
+          {/* WBS Breadcrumb Navigation */}
+          {wbsLevels.length > 1 && (
+            <Card>
+              <CardContent className="py-3">
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-gray-600">WBS Path:</span>
+                  {wbsLevels.map((levelData, index) => (
+                    <React.Fragment key={index}>
+                      {index > 0 && <span className="text-gray-400">/</span>}
+                      <Button
+                        variant={index === wbsLevels.length - 1 ? "default" : "ghost"}
+                        size="sm"
+                        onClick={() => handleBackToLevel(index + 1)}
+                        className="text-xs h-7"
+                      >
+                        {index === 0 ? "Level 1" : `${levelData.parentItemCode}`}
+                      </Button>
+                    </React.Fragment>
+                  ))}
+                  {wbsLevels.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setWbsLevels([{ level: 1 }])}
+                      className="text-xs h-7 ml-2"
+                    >
+                      <ArrowLeft className="h-3 w-3 mr-1" />
+                      Back to Level 1
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Multi-Level WBS Analysis - Display levels sequentially */}
           <div className="space-y-6">
@@ -452,7 +496,6 @@ export default function ProjectAnalysis() {
                                   {item.itemCode}: {item.description}
                                 </p>
                                 <div className="text-xs text-gray-500 space-y-1">
-                                  <p>{item.itemCount} sub-item{item.itemCount !== 1 ? 's' : ''}</p>
                                   {item.quantity && (
                                     <p>Qty: {item.quantity.toLocaleString()} {item.unit}</p>
                                   )}
@@ -500,7 +543,8 @@ export default function ProjectAnalysis() {
                   <p className="text-sm text-gray-600">
                     <strong>Analysis Summary:</strong> This chart shows all {items.length} items from the current project, 
                     sorted by cost. The top {paretoCriticalItems} items ({((paretoCriticalItems / items.length) * 100).toFixed(1)}%) 
-                    represent 80% of the total project cost ({formatCurrency(totalProjectCost, currency)}).
+                    represent 80% of the total project cost. 
+                    <strong> Project cost is calculated from Level 1 items only ({formatCurrency(totalProjectCost, currency)}).</strong>
                   </p>
                 </div>
               </CardContent>

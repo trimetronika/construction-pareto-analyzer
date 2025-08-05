@@ -104,8 +104,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
                 if (context.datasetIndex === 0) {
                   const item = topItems[context.dataIndex];
                   const tooltipLines = [
-                    `Cost: ${formatCurrency(context.parsed.y, currency)}`,
-                    `Sub-items: ${item.itemCount}`
+                    `Cost: ${formatCurrency(context.parsed.y, currency)}`
                   ];
                   
                   if (item.quantity) {
@@ -202,6 +201,9 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
           Click bars to drill down
         </div>
       )}
+      <div className="absolute bottom-2 left-2 text-xs text-gray-500 bg-white px-2 py-1 rounded shadow">
+        Level {level} items only
+      </div>
     </div>
   );
 }

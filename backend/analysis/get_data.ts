@@ -61,6 +61,7 @@ export const getAnalysisData = api<GetAnalysisRequest, GetAnalysisResponse>(
     let paretoCriticalItems = 0;
     
     if (project.status === 'processed') {
+      // Get all items for the overall Pareto chart
       items = await db.queryAll<BoQItem>`
         SELECT 
           id, item_code as "itemCode", item_number as "itemNumber",
@@ -73,7 +74,14 @@ export const getAnalysisData = api<GetAnalysisRequest, GetAnalysisResponse>(
         ORDER BY total_cost DESC
       `;
       
-      totalProjectCost = items.reduce((sum, item) => sum + item.totalCost, 0);
+      // Calculate total project cost from Level 1 items only (to avoid double counting)
+      const level1Items = await db.queryAll`
+        SELECT SUM(total_cost) as total_cost
+        FROM boq_items 
+        WHERE project_id = ${req.projectId} AND wbs_level = 1
+      `;
+      
+      totalProjectCost = level1Items[0]?.total_cost || 0;
       paretoCriticalItems = items.filter(item => item.isParetoCritical).length;
     }
     
