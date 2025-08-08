@@ -177,7 +177,7 @@ export namespace insights {
         }
 
         /**
-         * Generate realistic Value Engineering (VE) suggestions for a given item with bounded, feasible savings.
+         * Generate realistic Value Engineering (VE) suggestions (DeepSeek via OpenRouter) with bounded, feasible savings.
          */
         public async veSuggestions(params: RequestType<typeof api_insights_ve_suggestions_veSuggestions>): Promise<ResponseType<typeof api_insights_ve_suggestions_veSuggestions>> {
             // Now make the actual call to the API

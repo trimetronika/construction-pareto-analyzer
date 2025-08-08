@@ -1,4 +1,5 @@
 import { api, APIError } from "encore.dev/api";
+import OpenAI from "openai";
 
 export interface VESuggestionsRequest {
   itemName: string;
@@ -32,7 +33,25 @@ export interface VESuggestionsResponse {
   notes: string[]; // validation or assumption notes
 }
 
-// Generate realistic Value Engineering (VE) suggestions for a given item with bounded, feasible savings.
+// OpenAI client from environment variables.
+// OPENAI_API_KEY must be set in the environment. Model name default: gpt-4o-mini
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+type ModelAlt = {
+  description: string;
+  savingPercent?: number; // model-proposed percentage (0-100)
+  tradeOffs?: string;
+};
+
+type ModelPayload = {
+  alternatives: ModelAlt[];
+};
+
+// Generate realistic Value Engineering (VE) suggestions (OpenAI-driven) with bounded, feasible savings.
+// DEPRECATION NOTE: Removed deterministic keyword-based pickAlternatives(...) and categoryBounds(text) approach.
+// This endpoint now uses OpenAI to propose contextual alternatives and then clamps results to category bounds.
+// Future: consider few-shot examples or category-specific fine-tuning for stronger grounding.
 export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   { expose: true, method: "POST", path: "/insights/ve" },
   async (req) => {
@@ -45,84 +64,135 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     }
 
     const notes: string[] = [];
-    const desc = req.itemDescription.trim();
     const name = req.itemName.trim();
+    const desc = req.itemDescription.trim();
+    const category = (req.workCategory || "other").toLowerCase();
 
     // Normalize base rates: ensure consistency between unitRate and totalCost
     const derivedUnit = req.totalCost / req.quantity;
     let baseUnitRate = req.unitRate;
-    // If provided unitRate deviates > 5% from derived, prefer derived (often spreadsheet totals are authoritative)
     if (Math.abs(baseUnitRate - derivedUnit) / derivedUnit > 0.05) {
-      notes.push(
-        "Adjusted unit rate to match total cost and quantity for internal calculations."
-      );
+      notes.push("Adjusted unit rate to match total cost and quantity for internal calculations.");
       baseUnitRate = derivedUnit;
     }
     const baseTotal = baseUnitRate * req.quantity;
 
-    // Determine category and keyword context
-    const cat = (req.workCategory || "other").toLowerCase();
-    const dLow = `${name} ${desc}`.toLowerCase();
+    // Category bounds and suggested range (guides model and clamps results)
+    const bounds = categoryBounds(category);
+    const [suggestMinPct, suggestMaxPct] = suggestedRangePercent(category);
+    const maxAllowedPct = (1 - bounds.minUnitFactor) * 100; // e.g., minUnitFactor 0.75 -> max 25%
 
-    // Build candidate alternatives based on keywords and category
-    const candidates = pickAlternatives(cat, dLow);
+    // Build structured prompt for OpenAI
+    const messages = buildPrompt({
+      name,
+      desc,
+      quantity: req.quantity,
+      unitRate: round2(baseUnitRate),
+      totalCost: round2(baseTotal),
+      category,
+      suggestMinPct,
+      suggestMaxPct,
+      maxAllowedPct,
+    });
 
-    // Apply realistic bounds per category to compute new rates/costs
-    const bounds = categoryBounds(cat, dLow);
+    // Call OpenAI and parse strict JSON
+    let modelAlts: ModelAlt[] = [];
+    try {
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY not set");
+      }
+      const completion = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        temperature: 0.6,
+        messages,
+        response_format: { type: "json_object" }, // enforce JSON
+      });
+
+      const content = completion.choices?.[0]?.message?.content ?? "";
+      const parsed = safeParseJSON(content) as ModelPayload | null;
+      if (parsed?.alternatives?.length) {
+        modelAlts = parsed.alternatives.slice(0, 2);
+      } else {
+        notes.push("Model returned no structured alternatives; using fallback.");
+      }
+    } catch (e: any) {
+      // Keep the service resilient; fall back to a generic alternative
+      notes.push("Model generation failed; using fallback.");
+    }
+
+    // Compute VE alternatives with clamping and floors
     const alts: VEAlternative[] = [];
-    for (const c of candidates.slice(0, 2)) {
-      // Choose a conservative reduction within range
-      const midPct = (c.reductionMin + c.reductionMax) / 2;
-      const proposedUnit = baseUnitRate * (1 - midPct);
+    for (const m of modelAlts) {
+      const descText = (m.description || "").trim();
+      if (!descText) continue;
 
-      // Enforce category floor (avoid unrealistic deep cuts)
+      // Use model-proposed savingPercent if available, else use category mid
+      let proposedPct =
+        typeof m.savingPercent === "number" && isFinite(m.savingPercent)
+          ? Math.max(0, m.savingPercent)
+          : (suggestMinPct + suggestMaxPct) / 2;
+
+      // Clamp to category suggested range, then enforce absolute maxAllowedPct
+      const originalPct = proposedPct;
+      proposedPct = Math.min(Math.max(proposedPct, suggestMinPct), suggestMaxPct);
+      if (proposedPct !== originalPct) {
+        notes.push(
+          `Adjusted model savingPercent from ${round2(originalPct)}% to ${round2(
+            proposedPct
+          )}% to fit category range.`
+        );
+      }
+      if (proposedPct > maxAllowedPct) {
+        notes.push(`Capped savingPercent at ${round2(maxAllowedPct)}% due to category floor.`);
+        proposedPct = maxAllowedPct;
+      }
+
+      // Convert percent to new unit rate, enforce minUnitFactor
+      const proposedUnit = baseUnitRate * (1 - proposedPct / 100);
       const boundedUnit = Math.max(proposedUnit, baseUnitRate * bounds.minUnitFactor);
       let newUnitRate = round2(boundedUnit);
-
-      // Recompute totals
       let newTotalCost = round2(newUnitRate * req.quantity);
-
-      // Sanity: new total cannot exceed base total (if it does due to floors, keep but saving 0)
       let saving = round2(baseTotal - newTotalCost);
+
       if (saving < 0) {
-        newTotalCost = baseTotal;
+        // Safety: never worse than base
         newUnitRate = round2(baseUnitRate);
+        newTotalCost = round2(baseTotal);
         saving = 0;
       }
-      // Never exceed original total
-      saving = Math.min(saving, baseTotal);
+
       const savingPercent = baseTotal > 0 ? round2((saving / baseTotal) * 100) : 0;
 
       alts.push({
-        description: c.description,
+        description: descText,
         newUnitRate,
         newTotalCost,
         estimatedSaving: saving,
         savingPercent,
-        tradeOffs: c.tradeoffs,
+        tradeOffs: (m.tradeOffs || "").trim(),
       });
     }
 
-    // Ensure at least one alternative exists (fallback generic)
+    // Fallback if modelAlts empty or parsing failed
     if (alts.length === 0) {
-      const generic = {
-        description: "Standardize specifications and negotiate framework agreement with suppliers",
-        reductionMin: 0.04,
-        reductionMax: 0.08,
-        tradeoffs:
-          "Requires procurement alignment and volume commitment; minimal functional risk if specs remain compliant.",
-      };
-      const pct = (generic.reductionMin + generic.reductionMax) / 2;
-      const newUnit = Math.max(baseUnitRate * (1 - pct), baseUnitRate * 0.9);
+      const fallbackRange: [number, number] = [5, 8]; // default percent range for fallback
+      const fallbackPct = Math.min(
+        (fallbackRange[0] + fallbackRange[1]) / 2,
+        maxAllowedPct
+      );
+      const newUnit = Math.max(
+        baseUnitRate * (1 - fallbackPct / 100),
+        baseUnitRate * bounds.minUnitFactor
+      );
       const newTotal = round2(newUnit * req.quantity);
       const saving = Math.max(0, round2(baseTotal - newTotal));
       alts.push({
-        description: generic.description,
+        description: "Standardize specifications and negotiate framework agreement with suppliers",
         newUnitRate: round2(newUnit),
         newTotalCost: newTotal,
         estimatedSaving: saving,
         savingPercent: baseTotal > 0 ? round2((saving / baseTotal) * 100) : 0,
-        tradeOffs: generic.tradeoffs,
+        tradeOffs: "Requires procurement alignment and volume commitment",
       });
     }
 
@@ -134,7 +204,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
         unitRate: round2(baseUnitRate),
         totalCost: round2(baseTotal),
       },
-      alternatives: alts,
+      alternatives: alts.slice(0, 2),
       notes,
     };
 
@@ -142,171 +212,104 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   }
 );
 
-type CandidateAlt = {
-  description: string;
-  reductionMin: number; // fraction, e.g., 0.1 = 10%
-  reductionMax: number;
-  tradeoffs: string;
-};
+// ---------- Helpers ----------
 
-function pickAlternatives(category: string, text: string): CandidateAlt[] {
-  const alts: CandidateAlt[] = [];
-  const has = (k: string) => text.includes(k);
+function buildPrompt(input: {
+  name: string;
+  desc: string;
+  quantity: number;
+  unitRate: number;
+  totalCost: number;
+  category: string;
+  suggestMinPct: number;
+  suggestMaxPct: number;
+  maxAllowedPct: number;
+}) {
+  const { name, desc, quantity, unitRate, totalCost, category, suggestMinPct, suggestMaxPct, maxAllowedPct } = input;
 
-  if (category === "finishing") {
-    if (has("tile") || has("floor")) {
-      alts.push(
-        {
-          description: "Use smaller-size ceramic/homogeneous tile or local brand equivalent",
-          reductionMin: 0.12,
-          reductionMax: 0.2,
-          tradeoffs: "More grout lines and slightly less premium look; performance acceptable for most areas.",
-        },
-        {
-          description: "Switch to vinyl plank/roll flooring where suitable",
-          reductionMin: 0.2,
-          reductionMax: 0.3,
-          tradeoffs: "Lower abrasion resistance and heat tolerance; avoid heavy-traffic or wet areas.",
-        }
-      );
-    } else if (has("paint")) {
-      alts.push(
-        {
-          description: "Use high-coverage economy paint line with approved primer",
-          reductionMin: 0.1,
-          reductionMax: 0.18,
-          tradeoffs: "May require periodic repainting; initial appearance comparable with proper primer.",
-        },
-        {
-          description: "Optimize paint system (reduce coats with higher-solids paint)",
-          reductionMin: 0.08,
-          reductionMax: 0.15,
-          tradeoffs: "Requires surface prep control; ensure thickness meets spec.",
-        }
-      );
-    } else {
-      alts.push(
-        {
-          description: "Standardize finishes across rooms/areas to leverage bulk procurement",
-          reductionMin: 0.08,
-          reductionMax: 0.15,
-          tradeoffs: "Reduced variety; minor impact on aesthetics.",
-        }
-      );
-    }
-  } else if (category === "structure") {
-    if (has("concrete") || has("beton")) {
-      alts.push(
-        {
-          description: "Use blended cement (PPC/PSC) with SCM substitution (20–30%)",
-          reductionMin: 0.03,
-          reductionMax: 0.08,
-          tradeoffs: "Slightly longer setting time; verify design exposure class and early strength needs.",
-        }
-      );
-    }
-    if (has("slab") || has("floor") || has("pavement")) {
-      alts.push(
-        {
-          description: "Use welded wire mesh (WWM) for slab reinforcement instead of individual bars",
-          reductionMin: 0.05,
-          reductionMax: 0.12,
-          tradeoffs: "Less flexible for localized detailing; ensure lap lengths and panel layout suit geometry.",
-        }
-      );
-    }
-    if (has("formwork") || has("bekisting")) {
-      alts.push(
-        {
-          description: "Adopt reusable system formwork with optimized cycle time",
-          reductionMin: 0.06,
-          reductionMax: 0.1,
-          tradeoffs: "Requires planning and standardization of dimensions; potential learning curve on site.",
-        }
-      );
-    }
-    if (alts.length === 0) {
-      alts.push(
-        {
-          description: "Optimize reinforcement detailing and splice locations (design-to-build refinement)",
-          reductionMin: 0.04,
-          reductionMax: 0.08,
-          tradeoffs: "Needs design coordination; no functional compromise if code-compliant.",
-        }
-      );
-    }
-  } else if (category === "mep") {
-    if (has("pipe") || has("piping")) {
-      alts.push(
-        {
-          description: "Use PPR/uPVC pipes for non-pressurized or cold-water lines instead of copper/GI",
-          reductionMin: 0.15,
-          reductionMax: 0.25,
-          tradeoffs: "Temperature/pressure limitations; confirm with duty conditions and standards.",
-        }
-      );
-    }
-    if (has("cable") || has("feeder") || has("power")) {
-      alts.push(
-        {
-          description: "Use aluminum conductors for large feeders in lieu of copper (where code-permitted)",
-          reductionMin: 0.1,
-          reductionMax: 0.2,
-          tradeoffs: "Larger cross-section and terminations; ensure lugs/hardware compatibility and voltage drop checks.",
-        }
-      );
-    }
-    if (has("duct") || has("hvac") || has("fan")) {
-      alts.push(
-        {
-          description: "Optimize duct sizing and layout; standardize gauges and fittings",
-          reductionMin: 0.08,
-          reductionMax: 0.15,
-          tradeoffs: "Requires re-checking pressure losses; coordinate with architectural constraints.",
-        }
-      );
-    }
-    if (alts.length === 0) {
-      alts.push(
-        {
-          description: "Standardize MEP materials and consolidate vendors for volume discounts",
-          reductionMin: 0.08,
-          reductionMax: 0.15,
-          tradeoffs: "Limited brand options; ensure compliance certificates are obtained.",
-        }
-      );
-    }
-  } else {
-    // Generic category
-    alts.push(
-      {
-        description: "Supplier consolidation and specification standardization",
-        reductionMin: 0.06,
-        reductionMax: 0.12,
-        tradeoffs: "Reduced variety; ensure functional equivalence.",
-      }
-    );
-  }
+  const system = {
+    role: "system" as const,
+    content:
+      "You are a construction cost optimization assistant. Given a specific construction item, propose value engineering (VE) alternatives that maintain functionality but reduce cost. Be specific to the item context. Avoid generic suggestions unless they directly apply.",
+  };
 
-  return alts;
+  const user = {
+    role: "user" as const,
+    content: [
+      "Original Item:",
+      `- Name: ${name}`,
+      `- Description: ${desc}`,
+      `- Quantity: ${quantity}`,
+      `- Unit Rate: ${unitRate}`,
+      `- Total Cost: ${totalCost}`,
+      `- Category: ${category}`,
+      "",
+      "Task:",
+      `Generate 1–2 value engineering alternatives that are specific to the item. For each, provide:`,
+      `- description (specific to the original item)`,
+      `- savingPercent (number, ${suggestMinPct}–${suggestMaxPct}, never exceed ${maxAllowedPct}%)`,
+      `- tradeOffs (risks/considerations)`,
+      "",
+      "Output strictly in JSON matching this schema (no extra text):",
+      `{"alternatives":[{"description":"...","savingPercent":12.5,"tradeOffs":"..."}]}`,
+      "",
+      "Constraints:",
+      "- Do not change scope/function unless explicitly reasonable.",
+      "- Prefer material substitution, design refinement, specification standardization, or method change.",
+      "- Avoid vague items like 'supplier consolidation' unless clearly applicable to this exact item.",
+    ].join("\n"),
+  };
+
+  return [system, user];
 }
 
-function categoryBounds(category: string, text: string): { minUnitFactor: number } {
-  // Defines the minimum allowable unit rate factor to prevent unrealistic deep cuts
-  // e.g., minUnitFactor = 0.85 means newUnitRate >= 85% of baseUnitRate
+function safeParseJSON(s: string): any | null {
+  try {
+    // If the model wraps JSON in text, try to extract the first JSON object
+    const start = s.indexOf("{");
+    const end = s.lastIndexOf("}");
+    const jsonString = start !== -1 && end !== -1 ? s.slice(start, end + 1) : s;
+    return JSON.parse(jsonString);
+  } catch {
+    return null;
+  }
+}
+
+function categoryBounds(category: string): { minUnitFactor: number } {
   switch (category) {
     case "structure":
-      return { minUnitFactor: 0.88 }; // 12% max cut
+      return { minUnitFactor: 0.88 }; // up to 12% cut
     case "finishing":
-      // More flexibility on finishes
       return { minUnitFactor: 0.7 }; // up to 30% cut
     case "mep":
       return { minUnitFactor: 0.75 }; // up to 25% cut
     default:
-      return { minUnitFactor: 0.8 }; // default 20% cut
+      return { minUnitFactor: 0.8 }; // up to 20% cut
+  }
+}
+
+function suggestedRangePercent(category: string): [number, number] {
+  switch (category) {
+    case "structure":
+      return [4, 10];
+    case "finishing":
+      return [10, 25];
+    case "mep":
+      return [8, 20];
+    default:
+      return [5, 18];
   }
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+/**
+ * DEPRECATED (removed):
+ * - function pickAlternatives(category: string, text: string): CandidateAlt[]
+ * - function categoryBounds(category: string, text: string): { minUnitFactor: number }
+ *
+ * These deterministic, keyword-based functions were replaced by OpenAI-driven generation with
+ * post-processing clamps to enforce conservative, realistic savings per category.
+ */
