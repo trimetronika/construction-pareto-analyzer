@@ -1,4 +1,5 @@
 import { api, APIError } from "encore.dev/api";
+import { secret } from "encore.dev/config";
 import OpenAI from "openai";
 
 export interface VESuggestionsRequest {
@@ -33,10 +34,9 @@ export interface VESuggestionsResponse {
   notes: string[]; // validation or assumption notes
 }
 
-// OpenAI client from environment variables.
-// OPENAI_API_KEY must be set in the environment. Model name default: gpt-4o-mini
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+// OpenAI configuration using Encore secrets
+const openAIKey = secret("OpenAIKey");
+const openai = new OpenAI({ apiKey: openAIKey() });
 
 type ModelAlt = {
   description: string;
@@ -98,11 +98,8 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     // Call OpenAI and parse strict JSON
     let modelAlts: ModelAlt[] = [];
     try {
-      if (!process.env.OPENAI_API_KEY) {
-        throw new Error("OPENAI_API_KEY not set");
-      }
       const completion = await openai.chat.completions.create({
-        model: OPENAI_MODEL,
+        model: "gpt-4o-mini",
         temperature: 0.6,
         messages,
         response_format: { type: "json_object" }, // enforce JSON
