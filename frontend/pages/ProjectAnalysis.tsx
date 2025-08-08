@@ -14,7 +14,8 @@ import {
   Download,
   Play,
   Trash2,
-  ArrowLeft
+  ArrowLeft,
+  Wrench
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import backend from '~backend/client';
@@ -23,6 +24,7 @@ import WBSParetoChart, { WBSItem } from '../components/WBSParetoChart';
 import InsightsPanel from '../components/InsightsPanel';
 import CurrencySelector, { Currency } from '../components/CurrencySelector';
 import { formatCurrency } from '../utils/currency';
+import VESuggestionsDialog from '../components/VESuggestionsDialog';
 
 interface WBSLevelData {
   level: number;
@@ -41,6 +43,10 @@ export default function ProjectAnalysis() {
   ]);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  const [veOpen, setVeOpen] = useState(false);
+  const [veItem, setVeItem] = useState<WBSItem | null>(null);
+  const [veCategory, setVeCategory] = useState<string | undefined>(undefined);
 
   const { data: analysisData, isLoading: isLoadingAnalysis, refetch: refetchAnalysis } = useQuery({
     queryKey: ['analysis', projectId],
@@ -207,6 +213,12 @@ export default function ProjectAnalysis() {
   const getCurrentWBSData = () => {
     const currentLevel = wbsLevels[wbsLevels.length - 1];
     return getWBSData(currentLevel.level);
+  };
+
+  const openVEForItem = (item: WBSItem) => {
+    setVeItem(item);
+    setVeCategory(undefined);
+    setVeOpen(true);
   };
 
   if (isLoadingAnalysis) {
@@ -487,11 +499,13 @@ export default function ProjectAnalysis() {
                             <div 
                               key={item.id} 
                               className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
-                                levelData.level < 3 ? 'hover:bg-gray-50 cursor-pointer' : ''
+                                levelData.level < 3 ? 'hover:bg-gray-50' : ''
                               }`}
-                              onClick={() => levelData.level < 3 && handleWBSItemClick(item, levelData.level)}
                             >
-                              <div className="flex-1 min-w-0">
+                              <div 
+                                className={`flex-1 min-w-0 ${levelData.level < 3 ? 'cursor-pointer' : ''}`}
+                                onClick={() => levelData.level < 3 && handleWBSItemClick(item, levelData.level)}
+                              >
                                 <p className="text-sm font-medium text-gray-900 truncate">
                                   {item.itemCode}: {item.description}
                                 </p>
@@ -504,18 +518,30 @@ export default function ProjectAnalysis() {
                                   )}
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <p className="text-sm font-bold">{formatCurrency(item.totalCost, currency)}</p>
-                                <Badge variant="secondary" className="text-xs">
-                                  {item.cumulativePercentage.toFixed(1)}%
-                                </Badge>
+                              <div className="flex items-center space-x-2">
+                                <div className="text-right">
+                                  <p className="text-sm font-bold">{formatCurrency(item.totalCost, currency)}</p>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {item.cumulativePercentage.toFixed(1)}%
+                                  </Badge>
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="ml-2"
+                                  onClick={(e) => { e.stopPropagation(); openVEForItem(item); }}
+                                  title="Get VE Suggestions"
+                                >
+                                  <Wrench className="h-3 w-3 mr-1" />
+                                  VE
+                                </Button>
                               </div>
                             </div>
                           ))}
                         </div>
                         {levelData.level < 3 && wbsData?.items.some(item => item.isParetoCritical) && (
                           <p className="text-xs text-gray-500 mt-3 text-center">
-                            Click items to drill down to the next level
+                            Click an item to drill down or use VE to simulate alternatives
                           </p>
                         )}
                       </CardContent>
@@ -557,6 +583,24 @@ export default function ProjectAnalysis() {
             isLoading={isLoadingInsights}
             currency={currency}
             currentWBSData={getCurrentWBSData()}
+          />
+
+          <VESuggestionsDialog
+            open={veOpen}
+            onOpenChange={setVeOpen}
+            item={
+              veItem
+                ? {
+                    itemCode: veItem.itemCode,
+                    description: veItem.description,
+                    quantity: veItem.quantity,
+                    unitRate: veItem.unit ? veItem.unitRate : veItem.unitRate,
+                    totalCost: veItem.totalCost
+                  }
+                : null
+            }
+            currency={currency}
+            workCategory={veCategory}
           />
         </>
       )}

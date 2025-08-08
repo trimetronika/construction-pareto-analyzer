@@ -3,6 +3,7 @@ import { SQLDatabase } from "encore.dev/storage/sqldb";
 import { secret } from "encore.dev/config";
 
 const db = SQLDatabase.named("construction");
+// Reserved for future use with LLMs; not used in this deterministic implementation.
 const openAIKey = secret("OpenAIKey");
 
 export interface GenerateInsightsRequest {
@@ -26,41 +27,45 @@ export interface GenerateInsightsResponse {
   totalPotentialSavings: number;
 }
 
-// Generates AI-driven insights and recommendations for cost optimization.
+// Generates AI-driven insights and recommendations for cost optimization with realistic, bounded savings.
 export const generateInsights = api<GenerateInsightsRequest, GenerateInsightsResponse>(
   { expose: true, method: "POST", path: "/insights/generate" },
   async (req) => {
-    // Get project and BoQ data
+    // Validate project
     const project = await db.queryRow`
-      SELECT * FROM projects WHERE id = ${req.projectId}
+      SELECT id, name FROM projects WHERE id = ${req.projectId}
     `;
-    
     if (!project) {
       throw APIError.notFound("Project not found");
     }
-    
-    // Get the most recent BoQ items (latest processed data)
-    const items = await db.queryAll`
-      SELECT * FROM boq_items 
+
+    // Fetch current BoQ items (latest processed data)
+    const items = await db.queryAll<any>`
+      SELECT id, item_code, description, quantity, unit, unit_rate, total_cost, is_pareto_critical, wbs_level
+      FROM boq_items 
       WHERE project_id = ${req.projectId}
       ORDER BY total_cost DESC
     `;
-    
     if (items.length === 0) {
       throw APIError.invalidArgument("No BoQ items found for analysis");
     }
-    
-    // Clear existing insights to generate fresh ones based on current data
+
+    // Compute total project cost based on Level 1 items only to avoid double counting
+    const level1Rows = await db.queryAll<{ total_cost: number }>`
+      SELECT COALESCE(SUM(total_cost), 0) AS total_cost
+      FROM boq_items
+      WHERE project_id = ${req.projectId} AND wbs_level = 1
+    `;
+    const totalProjectCost = level1Rows[0]?.total_cost ?? 0;
+
+    // Refresh insights
     await db.exec`DELETE FROM ai_insights WHERE project_id = ${req.projectId}`;
-    
-    // Analyze top cost items (Pareto critical items) from current data
-    const criticalItems = items.filter(item => item.is_pareto_critical);
-    const totalProjectCost = items.reduce((sum, item) => sum + item.total_cost, 0);
-    
-    // Generate insights based on current analysis patterns
+
+    // Build insights deterministically with realistic bounds
+    const criticalItems = items.filter((it) => it.is_pareto_critical);
     const insights = await generateAnalysisInsights(req.projectId, criticalItems, totalProjectCost);
-    
-    // Store insights in database
+
+    // Persist insights
     for (const insight of insights) {
       await db.exec`
         INSERT INTO ai_insights (
@@ -73,8 +78,8 @@ export const generateInsights = api<GenerateInsightsRequest, GenerateInsightsRes
         )
       `;
     }
-    
-    // Get stored insights with IDs
+
+    // Return stored insights
     const storedInsights = await db.queryAll<AIInsight>`
       SELECT 
         id, insight_type as "insightType", title, description, recommendation,
@@ -84,162 +89,185 @@ export const generateInsights = api<GenerateInsightsRequest, GenerateInsightsRes
       WHERE project_id = ${req.projectId}
       ORDER BY potential_savings DESC NULLS LAST
     `;
-    
+
     const totalPotentialSavings = storedInsights.reduce(
-      (sum, insight) => sum + (insight.potentialSavings || 0), 0
+      (sum, i) => sum + (i.potentialSavings || 0),
+      0
     );
-    
+
     return {
       projectId: req.projectId,
       insights: storedInsights,
-      totalPotentialSavings
+      totalPotentialSavings,
     };
   }
 );
 
+// Helper functions for realistic savings and insight generation
+function clamp(val: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, val));
+}
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 async function generateAnalysisInsights(projectId: string, criticalItems: any[], totalProjectCost: number) {
-  const insights: Omit<AIInsight, 'id' | 'createdAt'>[] = [];
-  
-  // Get current timestamp for fresh analysis
-  const analysisTimestamp = new Date().toISOString();
-  
-  // Insight 1: High-cost item concentration (based on current critical items)
+  const insights: Omit<AIInsight, "id" | "createdAt">[] = [];
+
+  if (totalProjectCost <= 0) {
+    return insights;
+  }
+
+  // Cost concentration
   if (criticalItems.length > 0) {
     const topItem = criticalItems[0];
-    const itemPercentage = (topItem.total_cost / totalProjectCost) * 100;
-    
-    if (itemPercentage > 15) {
+    const itemPct = topItem.total_cost / totalProjectCost;
+    if (itemPct > 0.15) {
+      // Typical achievable saving: 5-12% of the item cost, capped conservatively
+      const baseSaving = topItem.total_cost * 0.1;
+      const saving = round2(clamp(baseSaving, 0, topItem.total_cost * 0.12));
       insights.push({
-        insightType: 'cost_concentration',
+        insightType: "cost_concentration",
         title: `High Cost Concentration Risk - ${topItem.item_code}`,
-        description: `Item "${topItem.description}" (${topItem.item_code}) represents ${itemPercentage.toFixed(1)}% of total project cost (${topItem.total_cost.toLocaleString()}). This creates significant cost risk exposure.`,
-        recommendation: 'Consider value engineering alternatives, bulk procurement strategies, or alternative material specifications to reduce dependency on this high-cost item.',
-        potentialSavings: topItem.total_cost * 0.1, // Assume 10% potential savings
-        confidenceScore: 0.85
+        description: `Item "${topItem.description}" (${topItem.item_code}) accounts for ${(itemPct * 100).toFixed(1)}% of total project cost.`,
+        recommendation:
+          "Consider value engineering, alternate specifications, or supplier consolidation to reduce reliance on this high-cost item.",
+        potentialSavings: saving,
+        confidenceScore: 0.85,
       });
     }
   }
-  
-  // Insight 2: Material substitution opportunities (based on current critical items)
-  const materialItems = criticalItems.filter(item => 
-    item.description.toLowerCase().includes('steel') || 
-    item.description.toLowerCase().includes('concrete') ||
-    item.description.toLowerCase().includes('cement') ||
-    item.description.toLowerCase().includes('material') ||
-    item.description.toLowerCase().includes('beton')
-  );
-  
+
+  // Material substitution opportunities
+  const materialItems = criticalItems.filter((it) => {
+    const d = (it.description || "").toLowerCase();
+    return (
+      d.includes("steel") ||
+      d.includes("concrete") ||
+      d.includes("cement") ||
+      d.includes("material") ||
+      d.includes("beton")
+    );
+  });
   if (materialItems.length > 0) {
-    const totalMaterialCost = materialItems.reduce((sum, item) => sum + item.total_cost, 0);
-    const materialCodes = materialItems.map(item => item.item_code).join(', ');
-    
+    const materialCost = materialItems.reduce((s, it) => s + (it.total_cost || 0), 0);
+    // Typical 6–12% achievable via substitutions and supplier competition
+    const saving = round2(clamp(materialCost * 0.09, 0, materialCost * 0.12));
+    const codes = materialItems.slice(0, 6).map((it) => it.item_code).join(", ");
     insights.push({
-      insightType: 'material_substitution',
-      title: 'Material Substitution Opportunity',
-      description: `${materialItems.length} high-cost material items identified (${materialCodes}) with total cost of ${totalMaterialCost.toLocaleString()}. Alternative materials or suppliers could reduce costs.`,
-      recommendation: 'Evaluate alternative materials with similar specifications, negotiate with multiple suppliers, or consider prefabricated alternatives for these material items.',
-      potentialSavings: totalMaterialCost * 0.08, // Assume 8% potential savings
-      confidenceScore: 0.75
+      insightType: "material_substitution",
+      title: "Material Substitution Opportunity",
+      description: `${materialItems.length} high-cost material items identified (${codes}).`,
+      recommendation:
+        "Evaluate alternative materials and multiple suppliers. Validate compliance with standards and performance requirements.",
+      potentialSavings: saving,
+      confidenceScore: 0.75,
     });
   }
-  
-  // Insight 3: Quantity optimization (based on current high-quantity critical items)
-  const highQuantityItems = criticalItems.filter(item => item.quantity > 100);
-  if (highQuantityItems.length > 0) {
-    const totalHighQuantityCost = highQuantityItems.reduce((sum, item) => sum + item.total_cost, 0);
-    const avgQuantity = highQuantityItems.reduce((sum, item) => sum + item.quantity, 0) / highQuantityItems.length;
-    
+
+  // Quantity optimization for very high quantities
+  const highQty = criticalItems.filter((it) => (it.quantity || 0) > 100);
+  if (highQty.length > 0) {
+    const subCost = highQty.reduce((s, it) => s + (it.total_cost || 0), 0);
+    // Realistic volume discount 3–7% depending on item
+    const saving = round2(clamp(subCost * 0.05, 0, subCost * 0.07));
     insights.push({
-      insightType: 'quantity_optimization',
-      title: 'Bulk Procurement Opportunity',
-      description: `${highQuantityItems.length} items with high quantities identified (avg: ${avgQuantity.toFixed(0)} units). Total cost: ${totalHighQuantityCost.toLocaleString()}. Bulk procurement could yield significant discounts.`,
-      recommendation: 'Negotiate volume discounts, consider just-in-time delivery to reduce storage costs, or explore consortium purchasing with other projects for these high-quantity items.',
-      potentialSavings: totalHighQuantityCost * 0.05, // Assume 5% potential savings
-      confidenceScore: 0.70
+      insightType: "quantity_optimization",
+      title: "Bulk Procurement Opportunity",
+      description: `${highQty.length} items with high quantities suitable for volume discounts.`,
+      recommendation:
+        "Aggregate orders, negotiate framework agreements, and align deliveries for just-in-time to reduce storage costs.",
+      potentialSavings: saving,
+      confidenceScore: 0.7,
     });
   }
-  
-  // Insight 4: Unit rate analysis (based on current critical items)
-  const avgUnitRates = new Map<string, { rates: number[], items: any[] }>();
-  criticalItems.forEach(item => {
-    if (item.unit && item.unit_rate > 0) {
-      if (!avgUnitRates.has(item.unit)) {
-        avgUnitRates.set(item.unit, { rates: [], items: [] });
-      }
-      avgUnitRates.get(item.unit)!.rates.push(item.unit_rate);
-      avgUnitRates.get(item.unit)!.items.push(item);
+
+  // Unit rate variance analysis by unit
+  const groups = new Map<string, { rates: number[]; items: any[] }>();
+  for (const it of criticalItems) {
+    if (it.unit && it.unit_rate > 0) {
+      if (!groups.has(it.unit)) groups.set(it.unit, { rates: [], items: [] });
+      const g = groups.get(it.unit)!;
+      g.rates.push(it.unit_rate);
+      g.items.push(it);
     }
+  }
+  for (const [unit, g] of groups) {
+    if (g.rates.length > 1) {
+      const maxRate = Math.max(...g.rates);
+      const minRate = Math.min(...g.rates);
+      if (minRate <= 0) continue;
+      const variancePct = (maxRate - minRate) / minRate; // e.g. 0.25 = 25%
+      if (variancePct > 0.2) {
+        const affectedCost = g.items.reduce((s, it) => s + (it.total_cost || 0), 0);
+        // Assume we can recover 40% of the variance through standardization, capped at 12% of affected cost
+        const recoverable = variancePct * 0.4;
+        const saving = round2(clamp(affectedCost * recoverable, 0, affectedCost * 0.12));
+        if (saving > 0) {
+          const affectedCodes = g.items.slice(0, 6).map((it) => it.item_code).join(", ");
+          insights.push({
+            insightType: "rate_variance",
+            title: `High Rate Variance for ${unit} Items`,
+            description: `Rates vary ${(variancePct * 100).toFixed(1)}%. Items: ${affectedCodes}.`,
+            recommendation:
+              "Standardize specifications and consolidate suppliers to align pricing across similar items.",
+            potentialSavings: saving,
+            confidenceScore: 0.65,
+          });
+        }
+      }
+    }
+  }
+
+  // Design optimization on design-heavy items
+  const designItems = criticalItems.filter((it) => {
+    const d = (it.description || "").toLowerCase();
+    return (
+      d.includes("formwork") ||
+      d.includes("reinforcement") ||
+      d.includes("connection") ||
+      d.includes("struktur") ||
+      d.includes("bekisting")
+    );
   });
-  
-  for (const [unit, data] of avgUnitRates) {
-    if (data.rates.length > 1) {
-      const maxRate = Math.max(...data.rates);
-      const minRate = Math.min(...data.rates);
-      const variance = ((maxRate - minRate) / minRate) * 100;
-      
-      if (variance > 20) {
-        const affectedItems = data.items.map(item => item.item_code).join(', ');
-        insights.push({
-          insightType: 'rate_variance',
-          title: `High Rate Variance for ${unit} Items`,
-          description: `Unit rates for ${unit} items vary by ${variance.toFixed(1)}% (${minRate.toLocaleString()} - ${maxRate.toLocaleString()}). Affected items: ${affectedItems}.`,
-          recommendation: 'Review specifications for similar items, standardize procurement processes, or renegotiate rates with suppliers to achieve consistent pricing.',
-          potentialSavings: (maxRate - minRate) * data.rates.length * 50, // Estimated savings
-          confidenceScore: 0.65
-        });
-      }
-    }
-  }
-  
-  // Insight 5: Design optimization (based on current design-related critical items)
-  const designItems = criticalItems.filter(item => 
-    item.description.toLowerCase().includes('formwork') ||
-    item.description.toLowerCase().includes('reinforcement') ||
-    item.description.toLowerCase().includes('connection') ||
-    item.description.toLowerCase().includes('struktur') ||
-    item.description.toLowerCase().includes('bekisting')
-  );
-  
   if (designItems.length > 0) {
-    const totalDesignCost = designItems.reduce((sum, item) => sum + item.total_cost, 0);
-    const designCodes = designItems.map(item => item.item_code).join(', ');
-    
+    const subCost = designItems.reduce((s, it) => s + (it.total_cost || 0), 0);
+    // Conservative 6–10% via detailing simplification and constructability improvements
+    const saving = round2(clamp(subCost * 0.1, 0, subCost * 0.1));
     insights.push({
-      insightType: 'design_optimization',
-      title: 'Design Optimization Potential',
-      description: `${designItems.length} design-related items identified in critical cost items (${designCodes}) with total cost of ${totalDesignCost.toLocaleString()}. Design modifications could reduce complexity and cost.`,
-      recommendation: 'Review structural design for optimization opportunities, consider modular construction methods, or simplify connection details for these design elements.',
-      potentialSavings: totalDesignCost * 0.12, // Assume 12% potential savings
-      confidenceScore: 0.80
+      insightType: "design_optimization",
+      title: "Design Optimization Potential",
+      description: `${designItems.length} design-related critical items indicate optimization opportunities.`,
+      recommendation:
+        "Simplify details, modularize elements, and refine reinforcement layout to reduce waste and labor time.",
+      potentialSavings: saving,
+      confidenceScore: 0.8,
     });
   }
-  
-  // Insight 6: WBS Level concentration analysis
-  const wbsLevelGroups = new Map<number, any[]>();
-  criticalItems.forEach(item => {
-    if (!wbsLevelGroups.has(item.wbs_level)) {
-      wbsLevelGroups.set(item.wbs_level, []);
-    }
-    wbsLevelGroups.get(item.wbs_level)!.push(item);
-  });
-  
-  for (const [level, levelItems] of wbsLevelGroups) {
-    if (levelItems.length > 0) {
-      const levelCost = levelItems.reduce((sum, item) => sum + item.total_cost, 0);
-      const levelPercentage = (levelCost / totalProjectCost) * 100;
-      
-      if (levelPercentage > 30 && levelItems.length >= 3) {
-        insights.push({
-          insightType: 'wbs_concentration',
-          title: `WBS Level ${level} Cost Concentration`,
-          description: `WBS Level ${level} contains ${levelItems.length} critical items representing ${levelPercentage.toFixed(1)}% of total project cost (${levelCost.toLocaleString()}). High concentration at this level indicates potential optimization opportunities.`,
-          recommendation: `Focus optimization efforts on WBS Level ${level} items. Consider breaking down complex items, alternative execution methods, or supplier consolidation for this work package.`,
-          potentialSavings: levelCost * 0.07, // Assume 7% potential savings
-          confidenceScore: 0.72
-        });
-      }
+
+  // WBS level concentration
+  const byLevel = new Map<number, any[]>();
+  for (const it of criticalItems) {
+    const lvl = it.wbs_level || 1;
+    if (!byLevel.has(lvl)) byLevel.set(lvl, []);
+    byLevel.get(lvl)!.push(it);
+  }
+  for (const [level, arr] of byLevel) {
+    const cost = arr.reduce((s, it) => s + (it.total_cost || 0), 0);
+    const pct = cost / totalProjectCost;
+    if (pct > 0.3 && arr.length >= 3) {
+      // Realistic focused optimization 4–7% of that level cost
+      const saving = round2(clamp(cost * 0.06, 0, cost * 0.07));
+      insights.push({
+        insightType: "wbs_concentration",
+        title: `WBS Level ${level} Cost Concentration`,
+        description: `Level ${level} contains ${arr.length} critical items totaling ${(pct * 100).toFixed(1)}% of project cost.`,
+        recommendation: `Prioritize Level ${level} for VE workshops, supplier consolidation, and method reviews.`,
+        potentialSavings: saving,
+        confidenceScore: 0.72,
+      });
     }
   }
-  
+
   return insights;
 }

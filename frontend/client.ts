@@ -144,6 +144,7 @@ export namespace analysis {
  */
 import { generateInsights as api_insights_generate_generateInsights } from "~backend/insights/generate";
 import { getInsights as api_insights_get_insights_getInsights } from "~backend/insights/get_insights";
+import { veSuggestions as api_insights_ve_suggestions_veSuggestions } from "~backend/insights/ve_suggestions";
 
 export namespace insights {
 
@@ -154,10 +155,11 @@ export namespace insights {
             this.baseClient = baseClient
             this.generateInsights = this.generateInsights.bind(this)
             this.getInsights = this.getInsights.bind(this)
+            this.veSuggestions = this.veSuggestions.bind(this)
         }
 
         /**
-         * Generates AI-driven insights and recommendations for cost optimization.
+         * Generates AI-driven insights and recommendations for cost optimization with realistic, bounded savings.
          */
         public async generateInsights(params: RequestType<typeof api_insights_generate_generateInsights>): Promise<ResponseType<typeof api_insights_generate_generateInsights>> {
             // Now make the actual call to the API
@@ -172,6 +174,15 @@ export namespace insights {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/insights/${encodeURIComponent(params.projectId)}`, {method: "GET", body: undefined})
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_insights_get_insights_getInsights>
+        }
+
+        /**
+         * Generate realistic Value Engineering (VE) suggestions for a given item with bounded, feasible savings.
+         */
+        public async veSuggestions(params: RequestType<typeof api_insights_ve_suggestions_veSuggestions>): Promise<ResponseType<typeof api_insights_ve_suggestions_veSuggestions>> {
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/insights/ve`, {method: "POST", body: JSON.stringify(params)})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_insights_ve_suggestions_veSuggestions>
         }
     }
 }
