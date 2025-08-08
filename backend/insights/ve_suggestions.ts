@@ -62,8 +62,8 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
 
     const notes: string[] = [];
     const name = req.itemName.trim();
-    const desc = req.itemDescription.trim();
-    const category = (req.workCategory || "other").toLowerCase();
+    const desc = req.itemDescription.trim() || "Concrete work for structural foundation";
+    const category = (req.workCategory || "structure").toLowerCase();
 
     // Normalize base rates: ensure consistency between unitRate and totalCost
     const derivedUnit = req.totalCost / req.quantity;
@@ -77,7 +77,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     // Category bounds and suggested range (guides model and clamps results)
     const bounds = categoryBounds(category);
     const [suggestMinPct, suggestMaxPct] = suggestedRangePercent(category);
-    const maxAllowedPct = (1 - bounds.minUnitFactor) * 100; // e.g., minUnitFactor 0.75 -> max 25%
+    const maxAllowedPct = (1 - bounds.minUnitFactor) * 100;
 
     // Build structured prompt for Gemini
     const messages = buildPrompt({
@@ -95,24 +95,32 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     // Call Gemini API and parse strict JSON
     let modelAlts: ModelAlt[] = [];
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" }); // Updated to a more capable model
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
         generationConfig: {
-          temperature: 0.6,
+          temperature: 0.4, // Lowered for more consistent output
           responseMimeType: "application/json",
+          maxOutputTokens: 500,
         },
       });
 
       const content = result.response.text();
+      console.log("Raw Gemini response:", content); // Debugging log
       const parsed = safeParseJSON(content) as ModelPayload | null;
       if (parsed?.alternatives?.length) {
-        modelAlts = parsed.alternatives.slice(0, 2).filter(alt => alt.description && alt.description.trim());
+        modelAlts = parsed.alternatives
+          .slice(0, 2)
+          .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0);
+        if (modelAlts.length === 0) {
+          notes.push("Model returned invalid alternatives; using fallback.");
+        }
       } else {
         notes.push("Model returned no structured alternatives; using fallback.");
       }
     } catch (e: any) {
-      notes.push("Model generation failed; using fallback.");
+      notes.push(`Model generation failed: ${e.message}; using fallback.`);
+      console.error("Gemini API error:", e); // Debugging log
     }
 
     // Compute VE alternatives with clamping and floors
@@ -121,26 +129,21 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       const descText = (m.description || "").trim();
       if (!descText) continue;
 
-      // Use model-proposed savingPercent if available, else use category mid
       let proposedPct =
         typeof m.savingPercent === "number" && isFinite(m.savingPercent)
-          ? Math.max(0, Math.min(100, m.savingPercent)) // Cap at 100%
+          ? Math.max(0, Math.min(100, m.savingPercent))
           : (suggestMinPct + suggestMaxPct) / 2;
 
-      // Clamp to category suggested range, then enforce absolute maxAllowedPct
       const originalPct = proposedPct;
       proposedPct = Math.min(Math.max(proposedPct, suggestMinPct), suggestMaxPct);
       if (proposedPct !== originalPct) {
-        notes.push(
-          `Adjusted model savingPercent from ${round2(originalPct)}% to ${round2(proposedPct)}% to fit category range.`
-        );
+        notes.push(`Adjusted model savingPercent from ${round2(originalPct)}% to ${round2(proposedPct)}% to fit category range.`);
       }
       if (proposedPct > maxAllowedPct) {
         notes.push(`Capped savingPercent at ${round2(maxAllowedPct)}% due to category floor.`);
         proposedPct = maxAllowedPct;
       }
 
-      // Convert percent to new unit rate, enforce minUnitFactor
       const proposedUnit = baseUnitRate * (1 - proposedPct / 100);
       const boundedUnit = Math.max(proposedUnit, baseUnitRate * bounds.minUnitFactor);
       let newUnitRate = round2(boundedUnit);
@@ -161,24 +164,23 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
         newTotalCost,
         estimatedSaving: saving,
         savingPercent,
-        tradeOffs: (m.tradeOffs || "").trim(),
+        tradeOffs: (m.tradeOffs || "").trim() || "None",
       });
     }
 
-    // Fallback if modelAlts empty or parsing failed
+    // Fallback with context-specific suggestion
     if (alts.length === 0) {
-      const fallbackRange: [number, number] = [5, 8]; // default percent range for fallback
-      const fallbackPct = Math.min((fallbackRange[0] + fallbackRange[1]) / 2, maxAllowedPct);
+      const fallbackPct = Math.min(6.5, maxAllowedPct); // Adjusted for concrete work
       const newUnit = Math.max(baseUnitRate * (1 - fallbackPct / 100), baseUnitRate * bounds.minUnitFactor);
       const newTotal = round2(newUnit * req.quantity);
       const saving = Math.max(0, round2(baseTotal - newTotal));
       alts.push({
-        description: "Standardize specifications and negotiate framework agreement with suppliers",
+        description: "Use high-strength concrete mix with optimized reinforcement design",
         newUnitRate: round2(newUnit),
         newTotalCost: newTotal,
         estimatedSaving: saving,
         savingPercent: baseTotal > 0 ? round2((saving / baseTotal) * 100) : 0,
-        tradeOffs: "Requires procurement alignment and volume commitment",
+        tradeOffs: "Requires testing and supplier coordination",
       });
     }
 
@@ -217,7 +219,7 @@ function buildPrompt(input: {
     {
       role: "system" as const,
       content:
-        "You are a construction cost optimization assistant. Given a specific construction item, propose value engineering (VE) alternatives that maintain functionality but reduce cost. Be specific to the item context. Avoid generic suggestions unless they directly apply.",
+        "You are a construction cost optimization assistant specializing in concrete work. Propose value engineering (VE) alternatives that maintain structural integrity but reduce cost. Be specific to concrete construction context (e.g., mix design, reinforcement, formwork). Avoid generic suggestions unless directly applicable.",
     },
     {
       role: "user" as const,
@@ -231,18 +233,18 @@ function buildPrompt(input: {
         `- Category: ${category}`,
         "",
         "Task:",
-        `Generate 1–2 value engineering alternatives that are specific to the item. For each, provide:`,
-        `- description (specific to the original item)`,
+        `Generate 1–2 value engineering alternatives specific to concrete work. For each, provide:`,
+        `- description (specific to concrete construction, e.g., mix optimization or formwork efficiency)`,
         `- savingPercent (number, ${suggestMinPct}–${suggestMaxPct}, never exceed ${maxAllowedPct}%)`,
-        `- tradeOffs (risks/considerations)`,
+        `- tradeOffs (risks/considerations specific to concrete)`,
         "",
         "Output strictly in JSON matching this schema (no extra text):",
         `{"alternatives":[{"description":"...","savingPercent":12.5,"tradeOffs":"..."}]}`,
         "",
         "Constraints:",
-        "- Do not change scope/function unless explicitly reasonable.",
-        "- Prefer material substitution, design refinement, specification standardization, or method change.",
-        "- Avoid vague items like 'supplier consolidation' unless clearly applicable to this exact item.",
+        "- Maintain structural integrity and safety standards.",
+        "- Suggest concrete-specific methods like material substitution, design optimization, or construction technique changes.",
+        "- Avoid vague suggestions like 'supplier negotiation' unless tied to concrete materials.",
       ].join("\n"),
     },
   ];
@@ -253,8 +255,9 @@ function safeParseJSON(s: string): any | null {
     const start = s.indexOf("{");
     const end = s.lastIndexOf("}");
     const jsonString = start !== -1 && end !== -1 ? s.slice(start, end + 1).trim() : s.trim();
-    return jsonString ? JSON.parse(jsonString) : null;
-  } catch {
+    return jsonString ? JSON.parse(jsonString.replace(/'/g, '"')) : null; // Handle single quotes if present
+  } catch (e) {
+    console.error("JSON parsing error:", e, "Input:", s);
     return null;
   }
 }
