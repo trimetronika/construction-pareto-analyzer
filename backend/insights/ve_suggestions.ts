@@ -1,6 +1,6 @@
 import { api, APIError } from "encore.dev/api";
 import { secret } from "encore.dev/config";
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export interface VESuggestionsRequest {
   itemName: string;
@@ -34,9 +34,9 @@ export interface VESuggestionsResponse {
   notes: string[]; // validation or assumption notes
 }
 
-// OpenAI configuration using Encore secrets
-const openAIKey = secret("OpenAIKey");
-const openai = new OpenAI({ apiKey: openAIKey() });
+// Gemini API configuration using Encore secrets
+const geminiKey = secret("GeminiKey");
+const genAI = new GoogleGenerativeAI(geminiKey());
 
 type ModelAlt = {
   description: string;
@@ -48,7 +48,7 @@ type ModelPayload = {
   alternatives: ModelAlt[];
 };
 
-// Generate realistic Value Engineering (VE) suggestions (OpenAI-driven) with bounded, feasible savings.
+// Generate realistic Value Engineering (VE) suggestions (Gemini-driven) with bounded, feasible savings.
 export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   { expose: true, method: "POST", path: "/insights/ve" },
   async (req) => {
@@ -79,7 +79,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     const [suggestMinPct, suggestMaxPct] = suggestedRangePercent(category);
     const maxAllowedPct = (1 - bounds.minUnitFactor) * 100; // e.g., minUnitFactor 0.75 -> max 25%
 
-    // Build structured prompt for OpenAI
+    // Build structured prompt for Gemini
     const messages = buildPrompt({
       name,
       desc,
@@ -92,17 +92,19 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       maxAllowedPct,
     });
 
-    // Call OpenAI and parse strict JSON
+    // Call Gemini API and parse strict JSON
     let modelAlts: ModelAlt[] = [];
     try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        temperature: 0.6,
-        messages,
-        response_format: { type: "json_object" }, // enforce JSON
+      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+      const result = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
+        generationConfig: {
+          temperature: 0.6,
+          responseMimeType: "application/json",
+        },
       });
 
-      const content = completion.choices?.[0]?.message?.content ?? "";
+      const content = result.response.text();
       const parsed = safeParseJSON(content) as ModelPayload | null;
       if (parsed?.alternatives?.length) {
         modelAlts = parsed.alternatives.slice(0, 2).filter(alt => alt.description && alt.description.trim());
