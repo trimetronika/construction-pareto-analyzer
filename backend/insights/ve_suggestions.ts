@@ -6,8 +6,8 @@ export interface VESuggestionsRequest {
   itemName: string;
   itemDescription: string;
   quantity: number;
-  unitRate: number;   // base unit rate in currency/unit
-  totalCost: number;  // base total cost (for validation)
+  unitRate: number; // base unit rate in currency/unit
+  totalCost: number; // base total cost (for validation)
   workCategory: string; // structure | finishing | mep | other
 }
 
@@ -49,9 +49,6 @@ type ModelPayload = {
 };
 
 // Generate realistic Value Engineering (VE) suggestions (OpenAI-driven) with bounded, feasible savings.
-// DEPRECATION NOTE: Removed deterministic keyword-based pickAlternatives(...) and categoryBounds(text) approach.
-// This endpoint now uses OpenAI to propose contextual alternatives and then clamps results to category bounds.
-// Future: consider few-shot examples or category-specific fine-tuning for stronger grounding.
 export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   { expose: true, method: "POST", path: "/insights/ve" },
   async (req) => {
@@ -59,7 +56,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     if (!req.itemName?.trim() || !req.itemDescription?.trim()) {
       throw APIError.invalidArgument("itemName and itemDescription are required");
     }
-    if (!(req.quantity > 0) || !(req.unitRate > 0) || !(req.totalCost > 0)) {
+    if (req.quantity <= 0 || req.unitRate <= 0 || req.totalCost <= 0 || isNaN(req.quantity) || isNaN(req.unitRate) || isNaN(req.totalCost)) {
       throw APIError.invalidArgument("quantity, unitRate, and totalCost must be positive numbers");
     }
 
@@ -108,12 +105,11 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       const content = completion.choices?.[0]?.message?.content ?? "";
       const parsed = safeParseJSON(content) as ModelPayload | null;
       if (parsed?.alternatives?.length) {
-        modelAlts = parsed.alternatives.slice(0, 2);
+        modelAlts = parsed.alternatives.slice(0, 2).filter(alt => alt.description && alt.description.trim());
       } else {
         notes.push("Model returned no structured alternatives; using fallback.");
       }
     } catch (e: any) {
-      // Keep the service resilient; fall back to a generic alternative
       notes.push("Model generation failed; using fallback.");
     }
 
@@ -126,7 +122,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       // Use model-proposed savingPercent if available, else use category mid
       let proposedPct =
         typeof m.savingPercent === "number" && isFinite(m.savingPercent)
-          ? Math.max(0, m.savingPercent)
+          ? Math.max(0, Math.min(100, m.savingPercent)) // Cap at 100%
           : (suggestMinPct + suggestMaxPct) / 2;
 
       // Clamp to category suggested range, then enforce absolute maxAllowedPct
@@ -134,9 +130,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       proposedPct = Math.min(Math.max(proposedPct, suggestMinPct), suggestMaxPct);
       if (proposedPct !== originalPct) {
         notes.push(
-          `Adjusted model savingPercent from ${round2(originalPct)}% to ${round2(
-            proposedPct
-          )}% to fit category range.`
+          `Adjusted model savingPercent from ${round2(originalPct)}% to ${round2(proposedPct)}% to fit category range.`
         );
       }
       if (proposedPct > maxAllowedPct) {
@@ -152,7 +146,6 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       let saving = round2(baseTotal - newTotalCost);
 
       if (saving < 0) {
-        // Safety: never worse than base
         newUnitRate = round2(baseUnitRate);
         newTotalCost = round2(baseTotal);
         saving = 0;
@@ -173,14 +166,8 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     // Fallback if modelAlts empty or parsing failed
     if (alts.length === 0) {
       const fallbackRange: [number, number] = [5, 8]; // default percent range for fallback
-      const fallbackPct = Math.min(
-        (fallbackRange[0] + fallbackRange[1]) / 2,
-        maxAllowedPct
-      );
-      const newUnit = Math.max(
-        baseUnitRate * (1 - fallbackPct / 100),
-        baseUnitRate * bounds.minUnitFactor
-      );
+      const fallbackPct = Math.min((fallbackRange[0] + fallbackRange[1]) / 2, maxAllowedPct);
+      const newUnit = Math.max(baseUnitRate * (1 - fallbackPct / 100), baseUnitRate * bounds.minUnitFactor);
       const newTotal = round2(newUnit * req.quantity);
       const saving = Math.max(0, round2(baseTotal - newTotal));
       alts.push({
@@ -224,49 +211,47 @@ function buildPrompt(input: {
 }) {
   const { name, desc, quantity, unitRate, totalCost, category, suggestMinPct, suggestMaxPct, maxAllowedPct } = input;
 
-  const system = {
-    role: "system" as const,
-    content:
-      "You are a construction cost optimization assistant. Given a specific construction item, propose value engineering (VE) alternatives that maintain functionality but reduce cost. Be specific to the item context. Avoid generic suggestions unless they directly apply.",
-  };
-
-  const user = {
-    role: "user" as const,
-    content: [
-      "Original Item:",
-      `- Name: ${name}`,
-      `- Description: ${desc}`,
-      `- Quantity: ${quantity}`,
-      `- Unit Rate: ${unitRate}`,
-      `- Total Cost: ${totalCost}`,
-      `- Category: ${category}`,
-      "",
-      "Task:",
-      `Generate 1–2 value engineering alternatives that are specific to the item. For each, provide:`,
-      `- description (specific to the original item)`,
-      `- savingPercent (number, ${suggestMinPct}–${suggestMaxPct}, never exceed ${maxAllowedPct}%)`,
-      `- tradeOffs (risks/considerations)`,
-      "",
-      "Output strictly in JSON matching this schema (no extra text):",
-      `{"alternatives":[{"description":"...","savingPercent":12.5,"tradeOffs":"..."}]}`,
-      "",
-      "Constraints:",
-      "- Do not change scope/function unless explicitly reasonable.",
-      "- Prefer material substitution, design refinement, specification standardization, or method change.",
-      "- Avoid vague items like 'supplier consolidation' unless clearly applicable to this exact item.",
-    ].join("\n"),
-  };
-
-  return [system, user];
+  return [
+    {
+      role: "system" as const,
+      content:
+        "You are a construction cost optimization assistant. Given a specific construction item, propose value engineering (VE) alternatives that maintain functionality but reduce cost. Be specific to the item context. Avoid generic suggestions unless they directly apply.",
+    },
+    {
+      role: "user" as const,
+      content: [
+        "Original Item:",
+        `- Name: ${name}`,
+        `- Description: ${desc}`,
+        `- Quantity: ${quantity}`,
+        `- Unit Rate: ${unitRate}`,
+        `- Total Cost: ${totalCost}`,
+        `- Category: ${category}`,
+        "",
+        "Task:",
+        `Generate 1–2 value engineering alternatives that are specific to the item. For each, provide:`,
+        `- description (specific to the original item)`,
+        `- savingPercent (number, ${suggestMinPct}–${suggestMaxPct}, never exceed ${maxAllowedPct}%)`,
+        `- tradeOffs (risks/considerations)`,
+        "",
+        "Output strictly in JSON matching this schema (no extra text):",
+        `{"alternatives":[{"description":"...","savingPercent":12.5,"tradeOffs":"..."}]}`,
+        "",
+        "Constraints:",
+        "- Do not change scope/function unless explicitly reasonable.",
+        "- Prefer material substitution, design refinement, specification standardization, or method change.",
+        "- Avoid vague items like 'supplier consolidation' unless clearly applicable to this exact item.",
+      ].join("\n"),
+    },
+  ];
 }
 
 function safeParseJSON(s: string): any | null {
   try {
-    // If the model wraps JSON in text, try to extract the first JSON object
     const start = s.indexOf("{");
     const end = s.lastIndexOf("}");
-    const jsonString = start !== -1 && end !== -1 ? s.slice(start, end + 1) : s;
-    return JSON.parse(jsonString);
+    const jsonString = start !== -1 && end !== -1 ? s.slice(start, end + 1).trim() : s.trim();
+    return jsonString ? JSON.parse(jsonString) : null;
   } catch {
     return null;
   }
@@ -301,12 +286,3 @@ function suggestedRangePercent(category: string): [number, number] {
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
-
-/**
- * DEPRECATED (removed):
- * - function pickAlternatives(category: string, text: string): CandidateAlt[]
- * - function categoryBounds(category: string, text: string): { minUnitFactor: number }
- *
- * These deterministic, keyword-based functions were replaced by OpenAI-driven generation with
- * post-processing clamps to enforce conservative, realistic savings per category.
- */
