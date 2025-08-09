@@ -28,10 +28,11 @@ interface WBSParetoChartProps {
 
 export default function WBSParetoChart({ items, currency = 'USD', onItemClick, level }: WBSParetoChartProps) {
   const chartRef = useRef<HTMLCanvasElement>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<Chart | null>(null);
 
   useEffect(() => {
-    if (!chartRef.current || items.length === 0) return;
+    if (!chartRef.current || !chartContainerRef.current || items.length === 0) return;
 
     // Destroy existing chart
     if (chartInstance.current) {
@@ -51,6 +52,10 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
     const cumulativePercentages = topItems.map(item => item.cumulativePercentage);
     const colors = topItems.map(item => item.isParetoCritical ? '#3b82f6' : '#94a3b8');
 
+    // Dynamically adjust chart width based on number of items
+    const itemWidth = 80; // Approximate width per item in pixels
+    const dynamicWidth = Math.min(topItems.length * itemWidth, 1200); // Cap at 1200px
+
     chartInstance.current = new Chart(ctx, {
       type: 'bar',
       data: {
@@ -66,7 +71,15 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             barPercentage: 0.9,
             categoryPercentage: 0.8,
             datalabels: {
-              display: false
+              display: true,
+              anchor: 'end',
+              align: 'top',
+              formatter: (value) => formatCurrency(value, currency),
+              color: '#1f2937',
+              font: {
+                size: 10
+              },
+              offset: 2
             }
           },
           {
@@ -140,7 +153,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             }
           },
           datalabels: {
-            display: true,
+            display: topItems.length <= 10, // Show labels only if <= 10 items to avoid overlap
             anchor: 'end',
             align: 'top',
             formatter: (value) => formatCurrency(value, currency),
@@ -159,8 +172,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
               text: `Item Level WBS ${level} (Dipesan Berdasarkan Biaya)`
             },
             ticks: {
-              maxRotation: 45,
-              minRotation: 45,
+              maxRotation: 0, // Disable rotation for dynamic scroll
               padding: 5,
               font: {
                 size: 10
@@ -206,8 +218,22 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             }
           }
         }
-      }
+      },
+      plugins: [{
+        beforeInit: (chart) => {
+          const originalFit = chart.legend.fit;
+          chart.legend.fit = function fit() {
+            originalFit.call(this);
+            this.height += 10; // Add extra space for legend
+          };
+        }
+      }]
     });
+
+    // Set container width dynamically
+    if (chartContainerRef.current) {
+      chartContainerRef.current.style.width = `${dynamicWidth}px`;
+    }
 
     return () => {
       if (chartInstance.current) {
@@ -225,11 +251,13 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
   }
 
   return (
-    <div className="relative h-[400px] md:h-[500px] w-full bg-white rounded-lg shadow-lg p-4">
-      <canvas ref={chartRef} />
+    <div ref={chartContainerRef} className="relative w-full max-w-full overflow-x-auto bg-white rounded-lg shadow-lg p-4">
+      <div className="w-full h-[400px] md:h-[500px]">
+        <canvas ref={chartRef} />
+      </div>
       {level < 3 && (
         <div className="absolute top-2 right-2 text-xs text-gray-600 bg-white/90 px-2 py-1 rounded shadow-md">
-          Klik batang untuk zoom
+          Gulir atau klik batang untuk zoom
         </div>
       )}
       <div className="absolute bottom-2 left-2 text-xs text-gray-600 bg-white/90 px-2 py-1 rounded shadow-md">
