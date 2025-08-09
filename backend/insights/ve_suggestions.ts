@@ -107,7 +107,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
             "Authorization": `Bearer ${openRouterKey()}`,
           },
           body: JSON.stringify({
-            model: "r1-0528-free", // Using DeepSeek Coder model
+            model: "deepseek/deepseek-r1-0528:free", // Using DeepSeek Coder model
             messages: messages,
             temperature: 0.5,
             max_tokens: 800,
