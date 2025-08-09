@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
 import { formatCurrency, Currency } from '../utils/currency';
+import ChartDataLabels from 'chartjs-plugin-datalabels';
 
-Chart.register(...registerables);
+Chart.register(...registerables, ChartDataLabels);
 
 export interface WBSItem {
   id: number;
@@ -42,7 +43,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
 
     // Prepare data for top 20 items
     const topItems = items.slice(0, 20);
-    const labels = topItems.map((item, index) => {
+    const labels = topItems.map((item) => {
       const truncatedDesc = item.description.substring(0, 20);
       return `${item.itemCode}: ${truncatedDesc}${item.description.length > 20 ? '...' : ''}`;
     });
@@ -56,15 +57,20 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
         labels,
         datasets: [
           {
-            label: 'Cost',
+            label: 'Biaya',
             data: costs,
             backgroundColor: colors,
             borderColor: colors,
             borderWidth: 1,
-            yAxisID: 'y'
+            yAxisID: 'y',
+            barPercentage: 0.9,
+            categoryPercentage: 0.8,
+            datalabels: {
+              display: false
+            }
           },
           {
-            label: 'Cumulative %',
+            label: 'Persentase Kumulatif',
             data: cumulativePercentages,
             type: 'line',
             borderColor: '#ef4444',
@@ -73,60 +79,76 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             fill: false,
             yAxisID: 'y1',
             pointBackgroundColor: '#ef4444',
-            pointBorderColor: '#ef4444',
-            pointRadius: 4
+            pointBorderColor: '#fff',
+            pointRadius: 4,
+            pointHoverRadius: 6
           }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: {
+          duration: 1000,
+          easing: 'easeOutQuad'
+        },
         interaction: {
           mode: 'index',
           intersect: false
         },
         onClick: (event, elements) => {
-          if (elements.length > 0 && onItemClick) {
+          if (elements.length > 0 && onItemClick && level < 3) {
             const index = elements[0].index;
             const item = topItems[index];
-            if (item && level < 3) { // Only allow drilling down to level 3
-              onItemClick(item);
-            }
+            onItemClick(item);
           }
         },
         plugins: {
           legend: {
-            position: 'top'
+            position: 'top',
+            labels: {
+              boxWidth: 12,
+              padding: 10
+            }
           },
           tooltip: {
+            backgroundColor: '#1f2937',
+            titleColor: '#f9fafb',
+            bodyColor: '#d1d5db',
+            borderColor: '#4b5563',
+            borderWidth: 1,
+            cornerRadius: 4,
+            padding: 8,
             callbacks: {
               label: function(context) {
+                const item = topItems[context.dataIndex];
+                const lines = [];
                 if (context.datasetIndex === 0) {
-                  const item = topItems[context.dataIndex];
-                  const tooltipLines = [
-                    `Cost: ${formatCurrency(context.parsed.y, currency)}`
-                  ];
-                  
-                  if (item.quantity) {
-                    tooltipLines.push(`Quantity: ${item.quantity.toLocaleString()}`);
-                  }
-                  if (item.unit) {
-                    tooltipLines.push(`Unit: ${item.unit}`);
-                  }
-                  if (item.unitRate) {
-                    tooltipLines.push(`Unit Rate: ${formatCurrency(item.unitRate, currency)}`);
-                  }
-                  
-                  return tooltipLines;
+                  lines.push(`Biaya: ${formatCurrency(context.parsed.y, currency)}`);
+                  if (item.quantity) lines.push(`Kuantitas: ${item.quantity.toLocaleString()}`);
+                  if (item.unit) lines.push(`Unit: ${item.unit}`);
+                  if (item.unitRate) lines.push(`Tarif Unit: ${formatCurrency(item.unitRate, currency)}`);
                 } else {
-                  return `Cumulative: ${context.parsed.y.toFixed(1)}%`;
+                  lines.push(`Kumulatif: ${context.parsed.y.toFixed(1)}%`);
                 }
+                return lines;
               },
               title: function(context) {
                 const item = topItems[context[0].dataIndex];
                 return `${item.itemCode}: ${item.description}`;
               }
             }
+          },
+          datalabels: {
+            display: true,
+            anchor: 'end',
+            align: 'top',
+            formatter: (value) => formatCurrency(value, currency),
+            color: '#1f2937',
+            font: {
+              size: 10
+            },
+            offset: 2
           }
         },
         scales: {
@@ -134,11 +156,15 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             display: true,
             title: {
               display: true,
-              text: `WBS Level ${level} Items (Ranked by Cost)`
+              text: `Item Level WBS ${level} (Dipesan Berdasarkan Biaya)`
             },
             ticks: {
               maxRotation: 45,
-              minRotation: 45
+              minRotation: 45,
+              padding: 5,
+              font: {
+                size: 10
+              }
             }
           },
           y: {
@@ -147,12 +173,16 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             position: 'left',
             title: {
               display: true,
-              text: `Cost (${currency})`
+              text: `Biaya (${currency})`
             },
             ticks: {
               callback: function(value) {
                 return formatCurrency(value as number, currency);
-              }
+              },
+              padding: 5
+            },
+            grid: {
+              color: '#e5e7eb'
             }
           },
           y1: {
@@ -161,7 +191,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             position: 'right',
             title: {
               display: true,
-              text: 'Cumulative Percentage (%)'
+              text: 'Persentase Kumulatif (%)'
             },
             min: 0,
             max: 100,
@@ -171,7 +201,8 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             ticks: {
               callback: function(value) {
                 return value + '%';
-              }
+              },
+              padding: 5
             }
           }
         }
@@ -187,22 +218,22 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
 
   if (items.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
-        No data available for this WBS level
+      <div className="flex items-center justify-center h-64 bg-gray-50 text-gray-600 rounded-lg shadow">
+        Tidak ada data tersedia untuk level WBS ini
       </div>
     );
   }
 
   return (
-    <div className="relative h-64">
+    <div className="relative h-[400px] md:h-[500px] w-full bg-white rounded-lg shadow-lg p-4">
       <canvas ref={chartRef} />
       {level < 3 && (
-        <div className="absolute top-2 right-2 text-xs text-gray-500 bg-white px-2 py-1 rounded shadow">
-          Click bars to drill down
+        <div className="absolute top-2 right-2 text-xs text-gray-600 bg-white/90 px-2 py-1 rounded shadow-md">
+          Klik batang untuk zoom
         </div>
       )}
-      <div className="absolute bottom-2 left-2 text-xs text-gray-500 bg-white px-2 py-1 rounded shadow">
-        Level {level} items only
+      <div className="absolute bottom-2 left-2 text-xs text-gray-600 bg-white/90 px-2 py-1 rounded shadow-md">
+        Hanya item Level {level}
       </div>
     </div>
   );
