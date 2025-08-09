@@ -271,7 +271,7 @@ function buildPrompt(input: {
     {
       role: "system",
       content:
-        "You are a construction cost optimization assistant. Propose value engineering (VE) alternatives that maintain functionality but reduce cost, tailored to the specific work category (e.g., structure, finishing, MEP). Provide diverse, category-specific suggestions.",
+        "You are a construction cost optimization assistant. Propose value engineering (VE) alternatives that maintain functionality but reduce cost, tailored to the specific work category (e.g., structure, finishing, MEP). Provide diverse, category-specific suggestions. Answer all text in Bahasa Indonesia.",
     },
     {
       role: "user",
