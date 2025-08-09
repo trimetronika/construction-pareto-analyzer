@@ -100,7 +100,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
 
     while (attempt < maxRetries) {
       try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+        const model = genAI.getGenerativeModel({ model: "gemma3-7b"});
         const result = await model.generateContent({
           contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
           generationConfig: {
