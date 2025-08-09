@@ -9,7 +9,6 @@
   "dependencies": {
     "encore.dev": "^1.48.8",
     "groq-sdk": "^0.20.1",
-    "node-fetch": "^3.3.2",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

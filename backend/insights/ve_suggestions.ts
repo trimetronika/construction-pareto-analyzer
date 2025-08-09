@@ -1,6 +1,5 @@
 import { api, APIError } from "encore.dev/api";
 import { secret } from "encore.dev/config";
-import fetch from "node-fetch";
 import Groq from "groq-sdk";
 
 export interface VESuggestionsRequest {
@@ -35,9 +34,7 @@ export interface VESuggestionsResponse {
   notes: string[]; // validation or assumption notes
 }
 
-// API configurations using Encore secrets
-const openRouterKey = secret("OpenRouterKey");
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+// Groq API configuration using Encore secrets
 const groqKey = secret("GroqKey");
 const groq = new Groq({ apiKey: groqKey() });
 
@@ -51,7 +48,7 @@ type ModelPayload = {
   alternatives: ModelAlt[];
 };
 
-// Generate realistic Value Engineering (VE) suggestions with fallback to Groq if OpenRouter limit is reached
+// Generate realistic Value Engineering (VE) suggestions using Groq
 export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   { expose: true, method: "POST", path: "/insights/ve" },
   async (req) => {
@@ -82,7 +79,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     const [suggestMinPct, suggestMaxPct] = suggestedRangePercent(category);
     const maxAllowedPct = (1 - bounds.minUnitFactor) * 100;
 
-    // Build structured prompt
+    // Build structured prompt for Groq
     const messages = buildPrompt({
       name,
       desc,
@@ -95,86 +92,33 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       maxAllowedPct,
     });
 
-    // Try OpenRouter first with retry logic
+    // Call Groq API
     let modelAlts: ModelAlt[] = [];
-    const maxRetries = 3;
-    let attempt = 0;
-    let delay = 1000; // Initial delay in ms
+    try {
+      const groqResponse = await groq.chat.completions.create({
+        messages: messages,
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.5,
+        max_tokens: 800,
+        response_format: { type: "json_object" },
+      });
 
-    while (attempt < maxRetries) {
-      try {
-        const response = await fetch(OPENROUTER_API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${openRouterKey()}`,
-          },
-          body: JSON.stringify({
-            model: "deepseek/deepseek-r1-0528:free",
-            messages: messages,
-            temperature: 0.5,
-            max_tokens: 800,
-            response_format: { type: "json_object" },
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Kesalahan HTTP! status: ${response.status}, pesan: ${errorText}`);
+      const content = groqResponse.choices[0]?.message?.content;
+      console.log("Respon mentah Groq:", content);
+      const parsed = safeParseJSON(content) as ModelPayload | null;
+      if (parsed?.alternatives?.length) {
+        modelAlts = parsed.alternatives
+          .slice(0, 2)
+          .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
+        if (modelAlts.length === 0) {
+          notes.push("Groq tidak mengembalikan alternatif terstruktur yang valid; menggunakan cadangan.");
         }
-
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-        console.log("Respon mentah OpenRouter (percobaan " + (attempt + 1) + "):", content);
-        const parsed = safeParseJSON(content) as ModelPayload | null;
-        if (parsed?.alternatives?.length) {
-          modelAlts = parsed.alternatives
-            .slice(0, 2)
-            .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
-          if (modelAlts.length > 0) break; // Exit loop if valid alternatives are found
-          notes.push("Model mengembalikan alternatif tidak valid; mencoba lagi atau menggunakan cadangan.");
-        } else {
-          notes.push("Model tidak mengembalikan alternatif terstruktur; mencoba lagi atau menggunakan cadangan.");
-        }
-      } catch (e: any) {
-        notes.push(`Gagal menghasilkan model (percobaan ${attempt + 1}): ${e.message}; ${attempt < maxRetries - 1 ? "mencoba lagi..." : "menggunakan cadangan atau Groq."}`);
-        console.error("Kesalahan API OpenRouter (percobaan " + (attempt + 1) + "):", e);
-        if ((e.message.includes("429 Too Many Requests") || e.message.includes("rate limit")) && attempt < maxRetries - 1) {
-          await new Promise(resolve => setTimeout(resolve, delay));
-          delay *= 2; // Exponential backoff
-        } else {
-          break;
-        }
+      } else {
+        notes.push("Groq tidak mengembalikan alternatif terstruktur; menggunakan cadangan.");
       }
-      attempt++;
-    }
-
-    // If OpenRouter fails due to rate limit, try Groq
-    if (modelAlts.length === 0 && attempt >= maxRetries) {
-      try {
-        const groqResponse = await groq.chat.completions.create({
-          messages: messages,
-          model: "llama-3.3-70b-versatile",
-          temperature: 0.5,
-          max_tokens: 800,
-          response_format: { type: "json_object" },
-        });
-
-        const content = groqResponse.choices[0]?.message?.content;
-        console.log("Respon mentah Groq:", content);
-        const parsed = safeParseJSON(content) as ModelPayload | null;
-        if (parsed?.alternatives?.length) {
-          modelAlts = parsed.alternatives
-            .slice(0, 2)
-            .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
-          notes.push("Berpindah ke Groq karena batas OpenRouter tercapai.");
-        } else {
-          notes.push("Groq tidak mengembalikan alternatif terstruktur; menggunakan cadangan.");
-        }
-      } catch (e: any) {
-        notes.push(`Gagal menghasilkan model dengan Groq: ${e.message}; menggunakan cadangan.`);
-        console.error("Kesalahan API Groq:", e);
-      }
+    } catch (e: any) {
+      notes.push(`Gagal menghasilkan model dengan Groq: ${e.message}; menggunakan cadangan.`);
+      console.error("Kesalahan API Groq:", e);
     }
 
     // Compute VE alternatives with clamping and floors
@@ -222,7 +166,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       });
     }
 
-    // Category-specific fallbacks if no valid alternatives from models
+    // Category-specific fallbacks if no valid alternatives from Groq
     if (alts.length === 0) {
       const fallbackPct = Math.min(6.5, maxAllowedPct);
       const newUnit = Math.max(baseUnitRate * (1 - fallbackPct / 100), baseUnitRate * bounds.minUnitFactor);
