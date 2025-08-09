@@ -1,6 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import backend from '~backend/client';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency, type Currency } from '../utils/currency';
@@ -63,12 +70,11 @@ export default function VESuggestionsDialog({ open, onOpenChange, item, currency
     async function run() {
       if (!open || !item) return;
       if (!item.quantity || !item.unitRate) {
-        // If missing key fields, try to back-calc unitRate from totalCost
         if (!item.quantity) {
           toast({
-            title: 'Missing quantity',
-            description: 'Quantity is required to simulate VE alternatives for this item.',
-            variant: 'destructive'
+            title: 'Kuantitas hilang',
+            description: 'Kuantitas diperlukan untuk mensimulasikan alternatif VE untuk item ini.',
+            variant: 'destructive',
           });
           return;
         }
@@ -82,18 +88,18 @@ export default function VESuggestionsDialog({ open, onOpenChange, item, currency
           quantity: item.quantity ?? 1,
           unitRate: item.unitRate ?? (item.totalCost / Math.max(1, item.quantity || 1)),
           totalCost: item.totalCost,
-          workCategory: workCategory || inferCategory(`${item.itemCode} ${item.description}`)
+          workCategory: workCategory || inferCategory(`${item.itemCode} ${item.description}`),
         };
         const resp = await backend.insights.veSuggestions(req);
         if (!cancelled) {
           setData(resp);
         }
       } catch (err) {
-        console.error('VE suggestions error:', err);
+        console.error('Kesalahan saran VE:', err);
         toast({
-          title: 'Failed to get VE suggestions',
-          description: 'An error occurred while generating suggestions.',
-          variant: 'destructive'
+          title: 'Gagal mendapatkan saran VE',
+          description: 'Terjadi kesalahan saat menghasilkan saran.',
+          variant: 'destructive',
         });
       } finally {
         if (!cancelled) setLoading(false);
@@ -107,31 +113,31 @@ export default function VESuggestionsDialog({ open, onOpenChange, item, currency
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[90vw] md:max-w-2xl max-h-[80vh] overflow-y-auto p-4 md:p-6">
         <DialogHeader>
-          <DialogTitle>Value Engineering Suggestions</DialogTitle>
+          <DialogTitle>Saran Value Engineering</DialogTitle>
           <DialogDescription>
-            Realistic alternatives that maintain functionality with potential cost reductions.
+            Alternatif realistis yang mempertahankan fungsionalitas dengan potensi pengurangan biaya.
           </DialogDescription>
         </DialogHeader>
 
         {!item ? (
-          <div className="text-sm text-gray-500">No item selected.</div>
+          <div className="text-sm text-gray-500">Tidak ada item yang dipilih.</div>
         ) : loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
           </div>
         ) : data ? (
           <div className="space-y-4">
-            <div className="border rounded-lg p-4">
-              <div className="text-sm text-gray-600 mb-1">Original Item</div>
+            <div className="border rounded-lg p-3 md:p-4">
+              <div className="text-sm text-gray-600 mb-1">Item Asli</div>
               <div className="font-medium text-gray-900">
                 {data.original.itemName}: {data.original.description}
               </div>
               <div className="text-sm text-gray-700 mt-1">
-                Quantity: <span className="font-medium">{data.original.quantity.toLocaleString()}</span>{' '}
-                • Unit Rate: <span className="font-medium">{formatCurrency(data.original.unitRate, currency)}</span>{' '}
-                • Total Cost: <span className="font-semibold">{formatCurrency(data.original.totalCost, currency)}</span>
+                Kuantitas: <span className="font-medium">{data.original.quantity.toLocaleString()}</span>{' '}
+                • Tarif Unit: <span className="font-medium">{formatCurrency(data.original.unitRate, currency)}</span>{' '}
+                • Total Biaya: <span className="font-semibold">{formatCurrency(data.original.totalCost, currency)}</span>
               </div>
               {data.notes.length > 0 && (
                 <div className="mt-2 space-y-1">
@@ -144,36 +150,36 @@ export default function VESuggestionsDialog({ open, onOpenChange, item, currency
 
             <div className="space-y-3">
               {data.alternatives.map((alt, idx) => (
-                <div key={idx} className="border rounded-lg p-4">
+                <div key={idx} className="border rounded-lg p-3 md:p-4">
                   <div className="flex items-start justify-between">
                     <div>
-                      <div className="text-sm text-gray-600 mb-1">Alternative {idx + 1}</div>
+                      <div className="text-sm text-gray-600 mb-1">Alternatif {idx + 1}</div>
                       <div className="font-medium text-gray-900">{alt.description}</div>
                     </div>
                     <Badge variant="outline" className="text-xs">
-                      {alt.savingPercent.toFixed(1)}% saving
+                      {alt.savingPercent.toFixed(1)}% penghematan
                     </Badge>
                   </div>
                   <div className="text-sm text-gray-700 mt-2">
-                    New Unit Rate: <span className="font-medium">{formatCurrency(alt.newUnitRate, currency)}</span>{' '}
-                    • New Total Cost: <span className="font-medium">{formatCurrency(alt.newTotalCost, currency)}</span>{' '}
-                    • Estimated Saving: <span className="font-semibold text-green-700">
+                    Tarif Unit Baru: <span className="font-medium">{formatCurrency(alt.newUnitRate, currency)}</span>{' '}
+                    • Total Biaya Baru: <span className="font-medium">{formatCurrency(alt.newTotalCost, currency)}</span>{' '}
+                    • Estimasi Penghematan: <span className="font-semibold text-green-700">
                       {formatCurrency(alt.estimatedSaving, currency)}
                     </span>
                   </div>
                   <div className="text-xs text-gray-600 mt-2">
-                    Trade-offs: {alt.tradeOffs}
+                    Kompromi: {alt.tradeOffs}
                   </div>
                 </div>
               ))}
             </div>
           </div>
         ) : (
-          <div className="text-sm text-gray-500">No suggestions available.</div>
+          <div className="text-sm text-gray-500">Tidak ada saran yang tersedia.</div>
         )}
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Tutup</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
