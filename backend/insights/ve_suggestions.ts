@@ -92,35 +92,47 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       maxAllowedPct,
     });
 
-    // Call Gemini API and parse strict JSON
+    // Call Gemini API with retry logic
     let modelAlts: ModelAlt[] = [];
-    try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-      const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
-        generationConfig: {
-          temperature: 0.5,
-          responseMimeType: "application/json",
-          maxOutputTokens: 800,
-        },
-      });
+    const maxRetries = 3;
+    let attempt = 0;
+    let delay = 1000; // Initial delay in ms
 
-      const content = result.response.text();
-      console.log("Raw Gemini response:", content);
-      const parsed = safeParseJSON(content) as ModelPayload | null;
-      if (parsed?.alternatives?.length) {
-        modelAlts = parsed.alternatives
-          .slice(0, 2)
-          .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
-        if (modelAlts.length === 0) {
-          notes.push("Model returned invalid alternatives; using fallback.");
+    while (attempt < maxRetries) {
+      try {
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+        const result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
+          generationConfig: {
+            temperature: 0.5,
+            responseMimeType: "application/json",
+            maxOutputTokens: 800,
+          },
+        });
+
+        const content = result.response.text();
+        console.log("Raw Gemini response (attempt " + (attempt + 1) + "):", content);
+        const parsed = safeParseJSON(content) as ModelPayload | null;
+        if (parsed?.alternatives?.length) {
+          modelAlts = parsed.alternatives
+            .slice(0, 2)
+            .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
+          if (modelAlts.length > 0) break; // Exit loop if valid alternatives are found
+          notes.push("Model returned invalid alternatives; retrying or using fallback.");
+        } else {
+          notes.push("Model returned no structured alternatives; retrying or using fallback.");
         }
-      } else {
-        notes.push("Model returned no structured alternatives; using fallback.");
+      } catch (e: any) {
+        notes.push(`Model generation failed (attempt ${attempt + 1}): ${e.message}; ${attempt < maxRetries - 1 ? "retrying..." : "using fallback."}`);
+        console.error("Gemini API error (attempt " + (attempt + 1) + "):", e);
+        if (e.message.includes("429 Too Many Requests") && attempt < maxRetries - 1) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2; // Exponential backoff
+        } else {
+          break;
+        }
       }
-    } catch (e: any) {
-      notes.push(`Model generation failed: ${e.message}; using fallback.`);
-      console.error("Gemini API error:", e);
+      attempt++;
     }
 
     // Compute VE alternatives with clamping and floors
@@ -168,7 +180,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       });
     }
 
-    // Category-specific fallbacks
+    // Category-specific fallbacks if model fails after retries
     if (alts.length === 0) {
       const fallbackPct = Math.min(6.5, maxAllowedPct);
       const newUnit = Math.max(baseUnitRate * (1 - fallbackPct / 100), baseUnitRate * bounds.minUnitFactor);
@@ -204,7 +216,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       if (options[1]) {
         alts.push({
           description: options[1],
-          newUnitRate: round2(newUnit * 0.98), // Slightly different rate for variety
+          newUnitRate: round2(newUnit * 0.98),
           newTotalCost: round2((newUnit * 0.98) * req.quantity),
           estimatedSaving: round2(baseTotal - (newUnit * 0.98) * req.quantity),
           savingPercent: baseTotal > 0 ? round2((baseTotal - (newUnit * 0.98) * req.quantity) / baseTotal * 100) : 0,
