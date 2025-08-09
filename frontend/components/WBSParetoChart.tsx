@@ -52,9 +52,9 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
     const cumulativePercentages = topItems.map(item => item.cumulativePercentage);
     const colors = topItems.map(item => item.isParetoCritical ? '#3b82f6' : '#94a3b8');
 
-    // Dynamically adjust chart width based on number of items
-    const itemWidth = 80; // Approximate width per item in pixels
-    const dynamicWidth = Math.min(topItems.length * itemWidth, 1200); // Cap at 1200px
+    // Set consistent minimum width (600px) with dynamic adjustment
+    const itemWidth = 60; // Reduced width per item
+    const dynamicWidth = Math.max(topItems.length * itemWidth, 600); // Minimum 600px
 
     chartInstance.current = new Chart(ctx, {
       type: 'bar',
@@ -62,7 +62,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
         labels,
         datasets: [
           {
-            label: 'Biaya',
+            label: '', // Remove label to avoid clutter
             data: costs,
             backgroundColor: colors,
             borderColor: colors,
@@ -71,19 +71,11 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             barPercentage: 0.9,
             categoryPercentage: 0.8,
             datalabels: {
-              display: true,
-              anchor: 'end',
-              align: 'top',
-              formatter: (value) => formatCurrency(value, currency),
-              color: '#1f2937',
-              font: {
-                size: 10
-              },
-              offset: 2
+              display: false // Remove data labels from bars
             }
           },
           {
-            label: 'Persentase Kumulatif',
+            label: 'Persentase Kumulatif (%)', // Specify unit in legend
             data: cumulativePercentages,
             type: 'line',
             borderColor: '#ef4444',
@@ -121,7 +113,15 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             position: 'top',
             labels: {
               boxWidth: 12,
-              padding: 10
+              padding: 10,
+              generateLabels: (chart) => {
+                return chart.data.datasets.map((dataset, i) => ({
+                  text: dataset.label || '',
+                  fillStyle: dataset.borderColor as string,
+                  hidden: !chart.isDatasetVisible(i),
+                  datasetIndex: i
+                }));
+              }
             }
           },
           tooltip: {
@@ -153,15 +153,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             }
           },
           datalabels: {
-            display: topItems.length <= 10, // Show labels only if <= 10 items to avoid overlap
-            anchor: 'end',
-            align: 'top',
-            formatter: (value) => formatCurrency(value, currency),
-            color: '#1f2937',
-            font: {
-              size: 10
-            },
-            offset: 2
+            display: false // Disabled globally
           }
         },
         scales: {
@@ -172,11 +164,12 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
               text: `Item Level WBS ${level} (Dipesan Berdasarkan Biaya)`
             },
             ticks: {
-              maxRotation: 0, // Disable rotation for dynamic scroll
+              maxRotation: 0,
               padding: 5,
               font: {
                 size: 10
-              }
+              },
+              display: true // Show ticks but handle overlap with tooltip
             }
           },
           y: {
@@ -224,7 +217,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
           const originalFit = chart.legend.fit;
           chart.legend.fit = function fit() {
             originalFit.call(this);
-            this.height += 10; // Add extra space for legend
+            this.height += 10;
           };
         }
       }]
@@ -233,6 +226,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
     // Set container width dynamically
     if (chartContainerRef.current) {
       chartContainerRef.current.style.width = `${dynamicWidth}px`;
+      chartContainerRef.current.style.minWidth = '600px'; // Ensure minimum width
     }
 
     return () => {
