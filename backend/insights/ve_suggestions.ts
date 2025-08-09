@@ -62,7 +62,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
 
     const notes: string[] = [];
     const name = req.itemName.trim();
-    const desc = req.itemDescription.trim() || "Concrete work for structural foundation";
+    const desc = req.itemDescription.trim() || (req.workCategory === "structure" ? "Structural concrete work" : "General construction work");
     const category = (req.workCategory || "structure").toLowerCase();
 
     // Normalize base rates: ensure consistency between unitRate and totalCost
@@ -95,23 +95,23 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     // Call Gemini API and parse strict JSON
     let modelAlts: ModelAlt[] = [];
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" }); // Updated to a more capable model
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
         generationConfig: {
-          temperature: 0.4, // Lowered for more consistent output
+          temperature: 0.5,
           responseMimeType: "application/json",
-          maxOutputTokens: 500,
+          maxOutputTokens: 800,
         },
       });
 
       const content = result.response.text();
-      console.log("Raw Gemini response:", content); // Debugging log
+      console.log("Raw Gemini response:", content);
       const parsed = safeParseJSON(content) as ModelPayload | null;
       if (parsed?.alternatives?.length) {
         modelAlts = parsed.alternatives
           .slice(0, 2)
-          .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0);
+          .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
         if (modelAlts.length === 0) {
           notes.push("Model returned invalid alternatives; using fallback.");
         }
@@ -120,7 +120,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       }
     } catch (e: any) {
       notes.push(`Model generation failed: ${e.message}; using fallback.`);
-      console.error("Gemini API error:", e); // Debugging log
+      console.error("Gemini API error:", e);
     }
 
     // Compute VE alternatives with clamping and floors
@@ -168,20 +168,49 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       });
     }
 
-    // Fallback with context-specific suggestion
+    // Category-specific fallbacks
     if (alts.length === 0) {
-      const fallbackPct = Math.min(6.5, maxAllowedPct); // Adjusted for concrete work
+      const fallbackPct = Math.min(6.5, maxAllowedPct);
       const newUnit = Math.max(baseUnitRate * (1 - fallbackPct / 100), baseUnitRate * bounds.minUnitFactor);
       const newTotal = round2(newUnit * req.quantity);
       const saving = Math.max(0, round2(baseTotal - newTotal));
+      const fallbackOptions = {
+        structure: [
+          "Use high-strength concrete mix with optimized reinforcement design",
+          "Implement modular formwork system for faster construction",
+        ],
+        finishing: [
+          "Use pre-fabricated finishing panels",
+          "Reduce decorative elements with cost-effective alternatives",
+        ],
+        mep: [
+          "Optimize piping layout to reduce material usage",
+          "Use energy-efficient MEP components",
+        ],
+        other: [
+          "Standardize specifications and negotiate with suppliers",
+          "Adopt lean construction techniques",
+        ],
+      };
+      const options = fallbackOptions[category] || fallbackOptions["structure"];
       alts.push({
-        description: "Use high-strength concrete mix with optimized reinforcement design",
+        description: options[0],
         newUnitRate: round2(newUnit),
         newTotalCost: newTotal,
         estimatedSaving: saving,
         savingPercent: baseTotal > 0 ? round2((saving / baseTotal) * 100) : 0,
-        tradeOffs: "Requires testing and supplier coordination",
+        tradeOffs: options[0].includes("concrete") ? "Requires testing and supplier coordination" : "Requires coordination with contractors",
       });
+      if (options[1]) {
+        alts.push({
+          description: options[1],
+          newUnitRate: round2(newUnit * 0.98), // Slightly different rate for variety
+          newTotalCost: round2((newUnit * 0.98) * req.quantity),
+          estimatedSaving: round2(baseTotal - (newUnit * 0.98) * req.quantity),
+          savingPercent: baseTotal > 0 ? round2((baseTotal - (newUnit * 0.98) * req.quantity) / baseTotal * 100) : 0,
+          tradeOffs: options[1].includes("concrete") ? "Requires testing and supplier coordination" : "Requires coordination with contractors",
+        });
+      }
     }
 
     const response: VESuggestionsResponse = {
@@ -219,7 +248,7 @@ function buildPrompt(input: {
     {
       role: "system" as const,
       content:
-        "You are a construction cost optimization assistant specializing in concrete work. Propose value engineering (VE) alternatives that maintain structural integrity but reduce cost. Be specific to concrete construction context (e.g., mix design, reinforcement, formwork). Avoid generic suggestions unless directly applicable.",
+        "You are a construction cost optimization assistant. Propose value engineering (VE) alternatives that maintain functionality but reduce cost, tailored to the specific work category (e.g., structure, finishing, MEP). Provide diverse, category-specific suggestions.",
     },
     {
       role: "user" as const,
@@ -233,18 +262,18 @@ function buildPrompt(input: {
         `- Category: ${category}`,
         "",
         "Task:",
-        `Generate 1–2 value engineering alternatives specific to concrete work. For each, provide:`,
-        `- description (specific to concrete construction, e.g., mix optimization or formwork efficiency)`,
+        `Generate 1–2 value engineering alternatives specific to the category. For each, provide:`,
+        `- description (specific to the category, e.g., structural optimization for structure, material efficiency for finishing)`,
         `- savingPercent (number, ${suggestMinPct}–${suggestMaxPct}, never exceed ${maxAllowedPct}%)`,
-        `- tradeOffs (risks/considerations specific to concrete)`,
+        `- tradeOffs (risks/considerations relevant to the category)`,
         "",
         "Output strictly in JSON matching this schema (no extra text):",
         `{"alternatives":[{"description":"...","savingPercent":12.5,"tradeOffs":"..."}]}`,
         "",
         "Constraints:",
-        "- Maintain structural integrity and safety standards.",
-        "- Suggest concrete-specific methods like material substitution, design optimization, or construction technique changes.",
-        "- Avoid vague suggestions like 'supplier negotiation' unless tied to concrete materials.",
+        "- Maintain core functionality and safety standards.",
+        "- Suggest category-specific methods (e.g., design optimization for structure, material substitution for finishing).",
+        "- Avoid generic suggestions unless applicable.",
       ].join("\n"),
     },
   ];
@@ -255,7 +284,7 @@ function safeParseJSON(s: string): any | null {
     const start = s.indexOf("{");
     const end = s.lastIndexOf("}");
     const jsonString = start !== -1 && end !== -1 ? s.slice(start, end + 1).trim() : s.trim();
-    return jsonString ? JSON.parse(jsonString.replace(/'/g, '"')) : null; // Handle single quotes if present
+    return jsonString ? JSON.parse(jsonString.replace(/'/g, '"')) : null;
   } catch (e) {
     console.error("JSON parsing error:", e, "Input:", s);
     return null;
