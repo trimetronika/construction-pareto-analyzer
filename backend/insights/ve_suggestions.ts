@@ -1,6 +1,7 @@
 import { api, APIError } from "encore.dev/api";
 import { secret } from "encore.dev/config";
 import fetch from "node-fetch";
+import Groq from "groq-sdk";
 
 export interface VESuggestionsRequest {
   itemName: string;
@@ -34,9 +35,11 @@ export interface VESuggestionsResponse {
   notes: string[]; // validation or assumption notes
 }
 
-// OpenRouter API configuration using Encore secrets
+// API configurations using Encore secrets
 const openRouterKey = secret("OpenRouterKey");
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const groqKey = secret("GroqKey");
+const groq = new Groq({ apiKey: groqKey() });
 
 type ModelAlt = {
   description: string;
@@ -48,7 +51,7 @@ type ModelPayload = {
   alternatives: ModelAlt[];
 };
 
-// Generate realistic Value Engineering (VE) suggestions (DeepSeek via OpenRouter) with bounded, feasible savings.
+// Generate realistic Value Engineering (VE) suggestions with fallback to Groq if OpenRouter limit is reached
 export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   { expose: true, method: "POST", path: "/insights/ve" },
   async (req) => {
@@ -62,14 +65,14 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
 
     const notes: string[] = [];
     const name = req.itemName.trim();
-    const desc = req.itemDescription.trim() || (req.workCategory === "structure" ? "Structural concrete work" : "General construction work");
+    const desc = req.itemDescription.trim() || (req.workCategory === "structure" ? "Pekerjaan beton struktural" : "Pekerjaan konstruksi umum");
     const category = (req.workCategory || "structure").toLowerCase();
 
     // Normalize base rates: ensure consistency between unitRate and totalCost
     const derivedUnit = req.totalCost / req.quantity;
     let baseUnitRate = req.unitRate;
     if (Math.abs(baseUnitRate - derivedUnit) / derivedUnit > 0.05) {
-      notes.push("Adjusted unit rate to match total cost and quantity for internal calculations.");
+      notes.push("Menyesuaikan tarif unit untuk sesuai dengan total biaya dan kuantitas perhitungan internal.");
       baseUnitRate = derivedUnit;
     }
     const baseTotal = baseUnitRate * req.quantity;
@@ -79,7 +82,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     const [suggestMinPct, suggestMaxPct] = suggestedRangePercent(category);
     const maxAllowedPct = (1 - bounds.minUnitFactor) * 100;
 
-    // Build structured prompt for DeepSeek
+    // Build structured prompt
     const messages = buildPrompt({
       name,
       desc,
@@ -92,7 +95,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       maxAllowedPct,
     });
 
-    // Call OpenRouter API with DeepSeek model and retry logic
+    // Try OpenRouter first with retry logic
     let modelAlts: ModelAlt[] = [];
     const maxRetries = 3;
     let attempt = 0;
@@ -107,7 +110,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
             "Authorization": `Bearer ${openRouterKey()}`,
           },
           body: JSON.stringify({
-            model: "deepseek/deepseek-r1-0528:free", // Using DeepSeek Coder model
+            model: "deepseek/deepseek-r1-0528:free",
             messages: messages,
             temperature: 0.5,
             max_tokens: 800,
@@ -117,25 +120,25 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
 
         if (!response.ok) {
           const errorText = await response.text();
-          throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+          throw new Error(`Kesalahan HTTP! status: ${response.status}, pesan: ${errorText}`);
         }
 
         const data = await response.json();
         const content = data.choices?.[0]?.message?.content;
-        console.log("Raw OpenRouter response (attempt " + (attempt + 1) + "):", content);
+        console.log("Respon mentah OpenRouter (percobaan " + (attempt + 1) + "):", content);
         const parsed = safeParseJSON(content) as ModelPayload | null;
         if (parsed?.alternatives?.length) {
           modelAlts = parsed.alternatives
             .slice(0, 2)
             .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
           if (modelAlts.length > 0) break; // Exit loop if valid alternatives are found
-          notes.push("Model returned invalid alternatives; retrying or using fallback.");
+          notes.push("Model mengembalikan alternatif tidak valid; mencoba lagi atau menggunakan cadangan.");
         } else {
-          notes.push("Model returned no structured alternatives; retrying or using fallback.");
+          notes.push("Model tidak mengembalikan alternatif terstruktur; mencoba lagi atau menggunakan cadangan.");
         }
       } catch (e: any) {
-        notes.push(`Model generation failed (attempt ${attempt + 1}): ${e.message}; ${attempt < maxRetries - 1 ? "retrying..." : "using fallback."}`);
-        console.error("OpenRouter API error (attempt " + (attempt + 1) + "):", e);
+        notes.push(`Gagal menghasilkan model (percobaan ${attempt + 1}): ${e.message}; ${attempt < maxRetries - 1 ? "mencoba lagi..." : "menggunakan cadangan atau Groq."}`);
+        console.error("Kesalahan API OpenRouter (percobaan " + (attempt + 1) + "):", e);
         if ((e.message.includes("429 Too Many Requests") || e.message.includes("rate limit")) && attempt < maxRetries - 1) {
           await new Promise(resolve => setTimeout(resolve, delay));
           delay *= 2; // Exponential backoff
@@ -144,6 +147,34 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
         }
       }
       attempt++;
+    }
+
+    // If OpenRouter fails due to rate limit, try Groq
+    if (modelAlts.length === 0 && attempt >= maxRetries) {
+      try {
+        const groqResponse = await groq.chat.completions.create({
+          messages: messages,
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.5,
+          max_tokens: 800,
+          response_format: { type: "json_object" },
+        });
+
+        const content = groqResponse.choices[0]?.message?.content;
+        console.log("Respon mentah Groq:", content);
+        const parsed = safeParseJSON(content) as ModelPayload | null;
+        if (parsed?.alternatives?.length) {
+          modelAlts = parsed.alternatives
+            .slice(0, 2)
+            .filter(alt => alt.description && alt.description.trim() && (alt.savingPercent ?? 0) >= 0 && alt.savingPercent <= 100);
+          notes.push("Berpindah ke Groq karena batas OpenRouter tercapai.");
+        } else {
+          notes.push("Groq tidak mengembalikan alternatif terstruktur; menggunakan cadangan.");
+        }
+      } catch (e: any) {
+        notes.push(`Gagal menghasilkan model dengan Groq: ${e.message}; menggunakan cadangan.`);
+        console.error("Kesalahan API Groq:", e);
+      }
     }
 
     // Compute VE alternatives with clamping and floors
@@ -160,10 +191,10 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       const originalPct = proposedPct;
       proposedPct = Math.min(Math.max(proposedPct, suggestMinPct), suggestMaxPct);
       if (proposedPct !== originalPct) {
-        notes.push(`Adjusted model savingPercent from ${round2(originalPct)}% to ${round2(proposedPct)}% to fit category range.`);
+        notes.push(`Menyesuaikan persentase penghematan model dari ${round2(originalPct)}% ke ${round2(proposedPct)}% untuk sesuai dengan rentang kategori.`);
       }
       if (proposedPct > maxAllowedPct) {
-        notes.push(`Capped savingPercent at ${round2(maxAllowedPct)}% due to category floor.`);
+        notes.push(`Membatasi persentase penghematan pada ${round2(maxAllowedPct)}% karena batas kategori.`);
         proposedPct = maxAllowedPct;
       }
 
@@ -187,11 +218,11 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
         newTotalCost,
         estimatedSaving: saving,
         savingPercent,
-        tradeOffs: (m.tradeOffs || "").trim() || "None",
+        tradeOffs: (m.tradeOffs || "").trim() || "Tidak ada",
       });
     }
 
-    // Category-specific fallbacks if model fails after retries
+    // Category-specific fallbacks if no valid alternatives from models
     if (alts.length === 0) {
       const fallbackPct = Math.min(6.5, maxAllowedPct);
       const newUnit = Math.max(baseUnitRate * (1 - fallbackPct / 100), baseUnitRate * bounds.minUnitFactor);
@@ -199,20 +230,20 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       const saving = Math.max(0, round2(baseTotal - newTotal));
       const fallbackOptions = {
         structure: [
-          "Use high-strength concrete mix with optimized reinforcement design",
-          "Implement modular formwork system for faster construction",
+          "Gunakan campuran beton berkekuatan tinggi dengan desain tulangan yang dioptimalkan",
+          "Terapkan sistem bekisting modular untuk percepatan konstruksi",
         ],
         finishing: [
-          "Use pre-fabricated finishing panels",
-          "Reduce decorative elements with cost-effective alternatives",
+          "Gunakan panel finishing prefabrikasi",
+          "Kurangi elemen dekoratif dengan alternatif hemat biaya",
         ],
         mep: [
-          "Optimize piping layout to reduce material usage",
-          "Use energy-efficient MEP components",
+          "Optimalkan tata letak pipa untuk mengurangi penggunaan material",
+          "Gunakan komponen MEP yang hemat energi",
         ],
         other: [
-          "Standardize specifications and negotiate with suppliers",
-          "Adopt lean construction techniques",
+          "Standarisasi spesifikasi dan negosiasi dengan pemasok",
+          "Adopsi teknik konstruksi lean",
         ],
       };
       const options = fallbackOptions[category] || fallbackOptions["structure"];
@@ -222,7 +253,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
         newTotalCost: newTotal,
         estimatedSaving: saving,
         savingPercent: baseTotal > 0 ? round2((saving / baseTotal) * 100) : 0,
-        tradeOffs: options[0].includes("concrete") ? "Requires testing and supplier coordination" : "Requires coordination with contractors",
+        tradeOffs: options[0].includes("beton") ? "Membutuhkan pengujian dan koordinasi pemasok" : "Membutuhkan koordinasi dengan kontraktor",
       });
       if (options[1]) {
         alts.push({
@@ -231,7 +262,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
           newTotalCost: round2((newUnit * 0.98) * req.quantity),
           estimatedSaving: round2(baseTotal - (newUnit * 0.98) * req.quantity),
           savingPercent: baseTotal > 0 ? round2((baseTotal - (newUnit * 0.98) * req.quantity) / baseTotal * 100) : 0,
-          tradeOffs: options[1].includes("concrete") ? "Requires testing and supplier coordination" : "Requires coordination with contractors",
+          tradeOffs: options[1].includes("beton") ? "Membutuhkan pengujian dan koordinasi pemasok" : "Membutuhkan koordinasi dengan kontraktor",
         });
       }
     }
@@ -271,32 +302,32 @@ function buildPrompt(input: {
     {
       role: "system",
       content:
-        "You are a construction cost optimization assistant. Propose value engineering (VE) alternatives that maintain functionality but reduce cost, tailored to the specific work category (e.g., structure, finishing, MEP). Provide diverse, category-specific suggestions. Answer all text in Bahasa Indonesia.",
+        "Anda adalah asisten optimasi biaya konstruksi. Usulkan alternatif value engineering (VE) yang mempertahankan fungsionalitas tetapi mengurangi biaya, disesuaikan dengan kategori pekerjaan tertentu (misalnya, struktur, finishing, MEP). Berikan saran yang beragam dan spesifik untuk kategori. Jawab semua teks dalam Bahasa Indonesia.",
     },
     {
       role: "user",
       content: [
-        "Original Item:",
-        `- Name: ${name}`,
-        `- Description: ${desc}`,
-        `- Quantity: ${quantity}`,
-        `- Unit Rate: ${unitRate}`,
-        `- Total Cost: ${totalCost}`,
-        `- Category: ${category}`,
+        "Item Asli:",
+        `- Nama: ${name}`,
+        `- Deskripsi: ${desc}`,
+        `- Kuantitas: ${quantity}`,
+        `- Tarif Unit: ${unitRate}`,
+        `- Total Biaya: ${totalCost}`,
+        `- Kategori: ${category}`,
         "",
-        "Task:",
-        `Generate 1–2 value engineering alternatives specific to the category. For each, provide:`,
-        `- description (specific to the category, e.g., structural optimization for structure, material efficiency for finishing)`,
-        `- savingPercent (number, ${suggestMinPct}–${suggestMaxPct}, never exceed ${maxAllowedPct}%)`,
-        `- tradeOffs (risks/considerations relevant to the category)`,
+        "Tugas:",
+        `Hasilkan 1–2 alternatif value engineering yang spesifik untuk kategori. Untuk masing-masing, berikan:`,
+        `- deskripsi (spesifik untuk kategori, misalnya optimasi struktur untuk struktur, efisiensi material untuk finishing)`,
+        `- savingPercent (angka, ${suggestMinPct}–${suggestMaxPct}, tidak boleh melebihi ${maxAllowedPct}%)`,
+        `- tradeOffs (risiko/pertimbangan yang relevan dengan kategori)`,
         "",
-        "Output strictly in JSON matching this schema (no extra text):",
+        "Keluaran harus dalam format JSON yang ketat sesuai skema ini (tanpa teks tambahan):",
         `{"alternatives":[{"description":"...","savingPercent":12.5,"tradeOffs":"..."}]}`,
         "",
-        "Constraints:",
-        "- Maintain core functionality and safety standards.",
-        "- Suggest category-specific methods (e.g., design optimization for structure, material substitution for finishing).",
-        "- Avoid generic suggestions unless applicable.",
+        "Batasan:",
+        "- Pertahankan fungsionalitas inti dan standar keselamatan.",
+        "- Usulkan metode spesifik untuk kategori (misalnya, optimasi desain untuk struktur, substitusi material untuk finishing).",
+        "- Hindari saran umum kecuali relevan.",
       ].join("\n"),
     },
   ];
@@ -309,7 +340,7 @@ function safeParseJSON(s: string): any | null {
     const jsonString = start !== -1 && end !== -1 ? s.slice(start, end + 1).trim() : s.trim();
     return jsonString ? JSON.parse(jsonString.replace(/'/g, '"')) : null;
   } catch (e) {
-    console.error("JSON parsing error:", e, "Input:", s);
+    console.error("Kesalahan parsing JSON:", e, "Input:", s);
     return null;
   }
 }
@@ -317,13 +348,13 @@ function safeParseJSON(s: string): any | null {
 function categoryBounds(category: string): { minUnitFactor: number } {
   switch (category) {
     case "structure":
-      return { minUnitFactor: 0.88 }; // up to 12% cut
+      return { minUnitFactor: 0.88 }; // hingga 12% potongan
     case "finishing":
-      return { minUnitFactor: 0.7 }; // up to 30% cut
+      return { minUnitFactor: 0.7 }; // hingga 30% potongan
     case "mep":
-      return { minUnitFactor: 0.75 }; // up to 25% cut
+      return { minUnitFactor: 0.75 }; // hingga 25% potongan
     default:
-      return { minUnitFactor: 0.8 }; // up to 20% cut
+      return { minUnitFactor: 0.8 }; // hingga 20% potongan
   }
 }
 
