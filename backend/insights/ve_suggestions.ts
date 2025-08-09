@@ -1,6 +1,6 @@
 import { api, APIError } from "encore.dev/api";
 import { secret } from "encore.dev/config";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import fetch from "node-fetch";
 
 export interface VESuggestionsRequest {
   itemName: string;
@@ -34,9 +34,9 @@ export interface VESuggestionsResponse {
   notes: string[]; // validation or assumption notes
 }
 
-// Gemini API configuration using Encore secrets
-const geminiKey = secret("GeminiKey");
-const genAI = new GoogleGenerativeAI(geminiKey());
+// OpenRouter API configuration using Encore secrets
+const openRouterKey = secret("OpenRouterKey");
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 type ModelAlt = {
   description: string;
@@ -48,7 +48,7 @@ type ModelPayload = {
   alternatives: ModelAlt[];
 };
 
-// Generate realistic Value Engineering (VE) suggestions (Gemini-driven) with bounded, feasible savings.
+// Generate realistic Value Engineering (VE) suggestions (DeepSeek via OpenRouter) with bounded, feasible savings.
 export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
   { expose: true, method: "POST", path: "/insights/ve" },
   async (req) => {
@@ -79,7 +79,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
     const [suggestMinPct, suggestMaxPct] = suggestedRangePercent(category);
     const maxAllowedPct = (1 - bounds.minUnitFactor) * 100;
 
-    // Build structured prompt for Gemini
+    // Build structured prompt for DeepSeek
     const messages = buildPrompt({
       name,
       desc,
@@ -92,7 +92,7 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
       maxAllowedPct,
     });
 
-    // Call Gemini API with retry logic
+    // Call OpenRouter API with DeepSeek model and retry logic
     let modelAlts: ModelAlt[] = [];
     const maxRetries = 3;
     let attempt = 0;
@@ -100,18 +100,29 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
 
     while (attempt < maxRetries) {
       try {
-        const model = genAI.getGenerativeModel({ model: "gemma3-7b"});
-        const result = await model.generateContent({
-          contents: [{ role: "user", parts: [{ text: messages[1].content }] }],
-          generationConfig: {
-            temperature: 0.5,
-            responseMimeType: "application/json",
-            maxOutputTokens: 800,
+        const response = await fetch(OPENROUTER_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${openRouterKey()}`,
           },
+          body: JSON.stringify({
+            model: "deepseek/deepseek-coder:6.7b", // Using DeepSeek Coder model
+            messages: messages,
+            temperature: 0.5,
+            max_tokens: 800,
+            response_format: { type: "json_object" },
+          }),
         });
 
-        const content = result.response.text();
-        console.log("Raw Gemini response (attempt " + (attempt + 1) + "):", content);
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+        }
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        console.log("Raw OpenRouter response (attempt " + (attempt + 1) + "):", content);
         const parsed = safeParseJSON(content) as ModelPayload | null;
         if (parsed?.alternatives?.length) {
           modelAlts = parsed.alternatives
@@ -124,8 +135,8 @@ export const veSuggestions = api<VESuggestionsRequest, VESuggestionsResponse>(
         }
       } catch (e: any) {
         notes.push(`Model generation failed (attempt ${attempt + 1}): ${e.message}; ${attempt < maxRetries - 1 ? "retrying..." : "using fallback."}`);
-        console.error("Gemini API error (attempt " + (attempt + 1) + "):", e);
-        if (e.message.includes("429 Too Many Requests") && attempt < maxRetries - 1) {
+        console.error("OpenRouter API error (attempt " + (attempt + 1) + "):", e);
+        if ((e.message.includes("429 Too Many Requests") || e.message.includes("rate limit")) && attempt < maxRetries - 1) {
           await new Promise(resolve => setTimeout(resolve, delay));
           delay *= 2; // Exponential backoff
         } else {
@@ -258,12 +269,12 @@ function buildPrompt(input: {
 
   return [
     {
-      role: "system" as const,
+      role: "system",
       content:
         "You are a construction cost optimization assistant. Propose value engineering (VE) alternatives that maintain functionality but reduce cost, tailored to the specific work category (e.g., structure, finishing, MEP). Provide diverse, category-specific suggestions.",
     },
     {
-      role: "user" as const,
+      role: "user",
       content: [
         "Original Item:",
         `- Name: ${name}`,
