@@ -52,9 +52,9 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
     const cumulativePercentages = topItems.map(item => item.cumulativePercentage);
     const colors = topItems.map(item => item.isParetoCritical ? '#3b82f6' : '#94a3b8');
 
-    // Set consistent minimum width (600px) with dynamic adjustment
-    const itemWidth = 60; // Reduced width per item
-    const dynamicWidth = Math.max(topItems.length * itemWidth, 600); // Minimum 600px
+    // Set consistent minimum width (700px) with dynamic adjustment
+    const itemWidth = 70; // Adjusted for better spacing
+    const dynamicWidth = Math.max(topItems.length * itemWidth, 700); // Minimum 700px for clarity
 
     chartInstance.current = new Chart(ctx, {
       type: 'bar',
@@ -62,20 +62,20 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
         labels,
         datasets: [
           {
-            label: '', // Remove label to avoid clutter
+            label: '', // No label to avoid clutter
             data: costs,
             backgroundColor: colors,
             borderColor: colors,
             borderWidth: 1,
             yAxisID: 'y',
-            barPercentage: 0.9,
-            categoryPercentage: 0.8,
+            barPercentage: 0.7, // Reduced to prevent overlap
+            categoryPercentage: 0.9, // Adjusted for better spacing
             datalabels: {
-              display: false // Remove data labels from bars
+              display: false // No data labels on bars
             }
           },
           {
-            label: 'Persentase Kumulatif (%)', // Specify unit in legend
+            label: 'Persentase Kumulatif (%)', // Correct unit in legend
             data: cumulativePercentages,
             type: 'line',
             borderColor: '#ef4444',
@@ -153,7 +153,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
             }
           },
           datalabels: {
-            display: false // Disabled globally
+            display: false // Globally disabled
           }
         },
         scales: {
@@ -169,7 +169,8 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
               font: {
                 size: 10
               },
-              display: true // Show ticks but handle overlap with tooltip
+              autoSkip: true, // Automatically skip labels if overlapping
+              maxTicksLimit: 15 // Limit ticks to reduce overlap
             }
           },
           y: {
@@ -226,7 +227,7 @@ export default function WBSParetoChart({ items, currency = 'USD', onItemClick, l
     // Set container width dynamically
     if (chartContainerRef.current) {
       chartContainerRef.current.style.width = `${dynamicWidth}px`;
-      chartContainerRef.current.style.minWidth = '600px'; // Ensure minimum width
+      chartContainerRef.current.style.minWidth = '700px'; // Increased minimum width
     }
 
     return () => {
