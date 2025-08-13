@@ -5,9 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { FileText, TrendingUp, Upload, Calendar } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 import backend from '~backend/client';
 
 export default function Dashboard() {
+  const { t } = useLanguage();
   const { data: projectsData, isLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: () => backend.projects.listProjects()
@@ -35,7 +37,7 @@ export default function Dashboard() {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+          <h1 className="text-3xl font-bold text-gray-900">{t('dashboard.title')}</h1>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[...Array(6)].map((_, i) => (
@@ -59,11 +61,11 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+        <h1 className="text-3xl font-bold text-gray-900">{t('dashboard.title')}</h1>
         <Link to="/upload">
           <Button className="flex items-center space-x-2">
             <Upload className="h-4 w-4" />
-            <span>New Project</span>
+            <span>{t('dashboard.upload_new')}</span>
           </Button>
         </Link>
       </div>
@@ -71,7 +73,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('dashboard.total_projects')}</CardTitle>
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -81,7 +83,7 @@ export default function Dashboard() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Processed Projects</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('dashboard.processed_projects')}</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -93,7 +95,7 @@ export default function Dashboard() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Recent Uploads</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('dashboard.recent_uploads')}</CardTitle>
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -111,20 +113,20 @@ export default function Dashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Recent Projects</CardTitle>
+          <CardTitle>{t('dashboard.recent_projects')}</CardTitle>
         </CardHeader>
         <CardContent>
           {projects.length === 0 ? (
             <div className="text-center py-8">
               <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No projects yet</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-2">{t('dashboard.no_projects')}</h3>
               <p className="text-gray-500 mb-4">
-                Upload your first construction project spreadsheet to get started with Pareto analysis.
+                {t('dashboard.description')}
               </p>
               <Link to="/upload">
                 <Button>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload Project
+                  {t('upload.upload_button')}
                 </Button>
               </Link>
             </div>
@@ -148,7 +150,7 @@ export default function Dashboard() {
                     </Badge>
                     <Link to={`/project/${project.id}`}>
                       <Button variant="outline" size="sm">
-                        View Analysis
+                        {t('common.view')} {t('analysis.title')}
                       </Button>
                     </Link>
                   </div>
