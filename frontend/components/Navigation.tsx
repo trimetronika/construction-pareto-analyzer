@@ -1,9 +1,12 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { BarChart3, Upload, Home } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
+import LanguageSelector from './LanguageSelector';
 
 export default function Navigation() {
   const location = useLocation();
+  const { t } = useLanguage();
 
   const isActive = (path: string) => {
     return location.pathname === path;
@@ -17,7 +20,7 @@ export default function Navigation() {
             <Link to="/" className="flex items-center space-x-2">
               <BarChart3 className="h-8 w-8 text-blue-600" />
               <span className="text-xl font-bold text-gray-900">
-                Construction Pareto Analyzer
+                {t('nav.app_title')}
               </span>
             </Link>
             
@@ -31,7 +34,7 @@ export default function Navigation() {
                 }`}
               >
                 <Home className="h-4 w-4" />
-                <span>Dashboard</span>
+                <span>{t('nav.dashboard')}</span>
               </Link>
               
               <Link
@@ -43,9 +46,13 @@ export default function Navigation() {
                 }`}
               >
                 <Upload className="h-4 w-4" />
-                <span>Upload Project</span>
+                <span>{t('nav.upload_project')}</span>
               </Link>
             </div>
+          </div>
+          
+          <div className="flex items-center space-x-4">
+            <LanguageSelector />
           </div>
         </div>
       </div>

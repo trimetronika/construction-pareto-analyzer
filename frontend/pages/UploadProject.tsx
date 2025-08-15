@@ -6,9 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { Upload, FileSpreadsheet, AlertCircle } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 import backend from '~backend/client';
 
 export default function UploadProject() {
+  const { t } = useLanguage();
   const [projectName, setProjectName] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -23,8 +25,8 @@ export default function UploadProject() {
         setFile(selectedFile);
       } else {
         toast({
-          title: "Invalid file type",
-          description: "Please select a CSV or XLSX file.",
+          title: t('common.error'),
+          description: t('upload.invalid_file_type'),
           variant: "destructive"
         });
       }
@@ -36,8 +38,8 @@ export default function UploadProject() {
     
     if (!projectName.trim()) {
       toast({
-        title: "Project name required",
-        description: "Please enter a project name.",
+        title: t('common.error'),
+        description: t('upload.project_name_required'),
         variant: "destructive"
       });
       return;
@@ -45,8 +47,8 @@ export default function UploadProject() {
 
     if (!file) {
       toast({
-        title: "File required",
-        description: "Please select a spreadsheet file to upload.",
+        title: t('common.error'),
+        description: t('upload.file_required'),
         variant: "destructive"
       });
       return;
@@ -75,8 +77,8 @@ export default function UploadProject() {
       });
 
       toast({
-        title: "Upload successful",
-        description: "Your project has been uploaded successfully."
+        title: t('common.success'),
+        description: t('upload.success')
       });
 
       // Navigate to project analysis page
@@ -84,8 +86,8 @@ export default function UploadProject() {
     } catch (error) {
       console.error('Upload error:', error);
       toast({
-        title: "Upload failed",
-        description: "There was an error uploading your file. Please try again.",
+        title: t('common.error'),
+        description: t('upload.error'),
         variant: "destructive"
       });
     } finally {
@@ -96,9 +98,9 @@ export default function UploadProject() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Upload New Project</h1>
+        <h1 className="text-3xl font-bold text-gray-900">{t('upload.title')}</h1>
         <p className="text-gray-600 mt-2">
-          Upload a construction project spreadsheet for Item Code-based WBS Pareto analysis and AI-driven insights.
+          {t('upload.description')}
         </p>
       </div>
 
@@ -106,17 +108,17 @@ export default function UploadProject() {
         <CardHeader>
           <CardTitle className="flex items-center space-x-2">
             <Upload className="h-5 w-5" />
-            <span>Project Details</span>
+            <span>{t('upload.project_details')}</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="projectName">Project Name</Label>
+              <Label htmlFor="projectName">{t('upload.project_name')}</Label>
               <Input
                 id="projectName"
                 type="text"
-                placeholder="Enter project name (e.g., Arumaya Office Building)"
+                placeholder={t('upload.project_name_placeholder')}
                 value={projectName}
                 onChange={(e) => setProjectName(e.target.value)}
                 disabled={isUploading}
@@ -124,7 +126,7 @@ export default function UploadProject() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="file">Spreadsheet File</Label>
+              <Label htmlFor="file">{t('upload.spreadsheet_file')}</Label>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
                 <input
                   id="file"
@@ -137,10 +139,10 @@ export default function UploadProject() {
                 <label htmlFor="file" className="cursor-pointer">
                   <FileSpreadsheet className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                   <div className="text-lg font-medium text-gray-900 mb-2">
-                    {file ? file.name : 'Choose a file'}
+                    {file ? file.name : t('upload.choose_file')}
                   </div>
                   <div className="text-sm text-gray-500">
-                    CSV or XLSX files only. Max file size: 10MB
+                    {t('upload.file_requirements')}
                   </div>
                 </label>
               </div>
@@ -173,12 +175,12 @@ export default function UploadProject() {
               {isUploading ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Uploading...
+                  {t('upload.uploading')}
                 </>
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload Project
+                  {t('upload.upload_button')}
                 </>
               )}
             </Button>
